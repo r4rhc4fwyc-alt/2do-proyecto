@@ -634,19 +634,33 @@ const flipHBtn = document.getElementById('flipHBtn');
 const flipVBtn = document.getElementById('flipVBtn');
 const resetTransformBtn = document.getElementById('resetTransformBtn');
 
+// Construyen un juego de trazos/transforms "vacío", con una entrada
+// por modo. Se usan tanto para el estado inicial como para resetear
+// todo al generar un sigilo nuevo.
+function emptyModeStrokes() {
+  return { guiado: [], libre: [] };
+}
+function emptyModeTransforms() {
+  return {
+    guiado: { angle: 0, flipH: false, flipV: false },
+    libre: { angle: 0, flipH: false, flipV: false },
+  };
+}
+
 // Ajuste estético del sigilo YA DIBUJADO: girarlo y/o invertirlo.
-// Cada modo tiene el suyo propio, igual que sus trazos. Los puntos
-// que guardamos en strokesByMode NUNCA cambian por esto: el ángulo y
-// las inversiones se aplican solo al momento de dibujar en pantalla
-// (ver applyTransform/redrawStrokes), así que mover el control es
+// Cada combinación de GEOMETRÍA + MODO tiene el suyo propio, igual
+// que sus trazos (ver más abajo). Los puntos que guardamos en
+// strokesByGeoMode NUNCA cambian por esto: el ángulo y las
+// inversiones se aplican solo al momento de dibujar en pantalla (ver
+// applyTransform/redrawStrokes), así que mover el control es
 // no-destructivo y se puede deshacer volviendo a 0°.
-let transformByMode = {
-  guiado: { angle: 0, flipH: false, flipV: false },
-  libre: { angle: 0, flipH: false, flipV: false },
+let transformByGeoMode = {
+  rueda: emptyModeTransforms(),
+  kamea: emptyModeTransforms(),
 };
 
 function currentTransform() {
-  return transformByMode[getSelectedMode()];
+  return transformByGeoMode[getSelectedGeometry()][getSelectedMode()];
 }
 
 // Convierte un punto "tal como se guardó" (sin rotar) en la posición
@@ -691,17 +705,23 @@ function inverseTransform(point, t) {
 // dibujan esos elementos, así que no hay nada que ocultar).
 let sigilRevealed = false;
 
-// Cada modo tiene su propio historial de trazos, independiente del
-// otro. Así podés ir y venir entre guiado y libre para comparar cómo
-// se ve el sigilo en cada uno, sin que cambiar de modo borre nada:
-// simplemente mostramos el "cajón" de trazos que le corresponde al
-// modo activo. Cada trazo es una lista de puntos, no solo píxeles ya
-// pintados, para que "Deshacer" pueda quitar el último y repintar el
-// resto.
-let strokesByMode = { guiado: [], libre: [] };
+// Cada combinación de GEOMETRÍA (rueda/kamea) y MODO (guiado/libre)
+// tiene su propio historial de trazos, totalmente independiente de
+// las otras tres. Así podés ir y venir entre cualquiera de las 4
+// combinaciones para comparar cómo queda el sigilo, sin que cambiar
+// de geometría o de modo borre nada: simplemente mostramos el
+// "cajón" de trazos que le corresponde a la combinación activa. Cada
+// trazo es una lista de puntos NORMALIZADOS (fracción 0–1 del ancho
+// del canvas, no píxeles absolutos) — así, si cambia el tamaño del
+// canvas (por ejemplo al redimensionar la ventana), el trazo se
+// reescala solo en vez de quedar desalineado.
+let strokesByGeoMode = {
+  rueda: emptyModeStrokes(),
+  kamea: emptyModeStrokes(),
+};
 
 function currentStrokes() {
-  return strokesByMode[getSelectedMode()];
+  return strokesByGeoMode[getSelectedGeometry()][getSelectedMode()];
 }
 
 function updateUndoButton() {
@@ -752,22 +772,6 @@ function updateGeometryOptionStyles() {
   geometryKameaOption.classList.toggle('active', geometry === 'kamea');
 }
 
-// A diferencia del modo (guiado/libre), que se puede cambiar en
-// cualquier momento para comparar, cambiar de GEOMETRÍA sí invalida
-// todo lo dibujado (rueda y kamea son sistemas de coordenadas
-// completamente distintos). Por eso el selector de geometría se
-// bloquea apenas hay algún trazo, en cualquiera de los dos modos.
-function setGeometryLocked(locked) {
-  geometryInputs.forEach(input => { input.disabled = locked; });
-  geometryRuedaOption.style.opacity = locked ? '0.5' : '1';
-  geometryKameaOption.style.opacity = locked ? '0.5' : '1';
-}
-
-function updateGeometryLock() {
-  const anyStrokes = strokesByMode.guiado.length > 0 || strokesByMode.libre.length > 0;
-  setGeometryLocked(anyStrokes);
-}
-
 function renderLettersReadout() {
   if (currentLetters.length === 0) {
     lettersReadout.innerHTML = '<span class="empty">— genera un sigilo para ver las letras —</span>';
@@ -778,17 +782,14 @@ function renderLettersReadout() {
 
 function generateSigil() {
   currentLetters = reduceToSigil(phraseInput.value);
-  // Un sigilo nuevo cambia por completo la rueda: los trazos viejos
-  // (de cualquiera de los dos modos) ya no corresponderían a nada.
-  strokesByMode = { guiado: [], libre: [] };
-  transformByMode = {
-    guiado: { angle: 0, flipH: false, flipV: false },
-    libre: { angle: 0, flipH: false, flipV: false },
-  };
+  // Un sigilo nuevo cambia por completo el significado de lo
+  // dibujado: los trazos viejos, en cualquier combinación de
+  // geometría y modo, ya no corresponderían a nada.
+  strokesByGeoMode = { rueda: emptyModeStrokes(), kamea: emptyModeStrokes() };
+  transformByGeoMode = { rueda: emptyModeTransforms(), kamea: emptyModeTransforms() };
   sigilRevealed = false;
   clearDrawing();
   updateUndoButton();
-  updateGeometryLock();
   updateRevealButton();
   updateTransformControls();
   renderLettersReadout();
@@ -799,7 +800,7 @@ function generateSigil() {
 }
 
 // Borra solo lo que se ve en el canvas de dibujo. No toca
-// `strokesByMode`: quien llama decide si también hay que olvidar
+// `strokesByGeoMode`: quien llama decide si también hay que olvidar
 // el historial.
 function clearDrawing() {
   const size = canvasWrap.clientWidth;
@@ -814,7 +815,10 @@ function redrawStrokes() {
   const t = currentTransform();
   currentStrokes().forEach(rawPoints => {
     if (rawPoints.length < 2) return;
-    const points = rawPoints.map(p => applyTransform(p, t));
+    // rawPoints está en coordenadas normalizadas (0–1): primero lo
+    // escalamos al tamaño actual del canvas, y recién ahí aplicamos
+    // el giro/inversión (que trabaja en píxeles).
+    const points = rawPoints.map(p => applyTransform(toPixelPoint(p), t));
     drawCtx.beginPath();
     drawCtx.moveTo(points[0].x, points[0].y);
     for (let i = 1; i < points.length; i++) {
@@ -846,25 +850,17 @@ modeInputs.forEach(input => {
   });
 });
 
-// Cambiar de geometría (rueda <-> kamea) sí invalida todo lo
-// dibujado en AMBOS modos, porque las coordenadas de un sistema no
-// significan nada en el otro. El selector ya está bloqueado mientras
-// haya trazos (ver updateGeometryLock), así que este reseteo total
-// solo puede pasar con el canvas vacío de todas formas.
+// Igual que el modo, cambiar de geometría ya no borra nada: cada
+// combinación geometría+modo tiene su propio cajón de trazos (ver
+// strokesByGeoMode), así que esto solo cambia qué cajón se muestra.
 geometryInputs.forEach(input => {
   input.addEventListener('change', () => {
     updateGeometryOptionStyles();
-    strokesByMode = { guiado: [], libre: [] };
-    transformByMode = {
-      guiado: { angle: 0, flipH: false, flipV: false },
-      libre: { angle: 0, flipH: false, flipV: false },
-    };
     sigilRevealed = false;
-    clearDrawing();
-    updateUndoButton();
-    updateGeometryLock();
     updateRevealButton();
+    updateUndoButton();
     updateTransformControls();
+    redrawStrokes();
     drawBackground();
   });
 });
@@ -881,30 +877,24 @@ undoBtn.addEventListener('click', () => {
   strokes.pop();
   redrawStrokes();
   updateUndoButton();
-  updateGeometryLock();
 });
 
 clearStrokeBtn.addEventListener('click', () => {
-  strokesByMode[getSelectedMode()] = [];
-  transformByMode[getSelectedMode()] = { angle: 0, flipH: false, flipV: false };
+  strokesByGeoMode[getSelectedGeometry()][getSelectedMode()] = [];
+  transformByGeoMode[getSelectedGeometry()][getSelectedMode()] = { angle: 0, flipH: false, flipV: false };
   clearDrawing();
   updateUndoButton();
-  updateGeometryLock();
   updateTransformControls();
 });
 
 resetBtn.addEventListener('click', () => {
   phraseInput.value = '';
   currentLetters = [];
-  strokesByMode = { guiado: [], libre: [] };
-  transformByMode = {
-    guiado: { angle: 0, flipH: false, flipV: false },
-    libre: { angle: 0, flipH: false, flipV: false },
-  };
+  strokesByGeoMode = { rueda: emptyModeStrokes(), kamea: emptyModeStrokes() };
+  transformByGeoMode = { rueda: emptyModeTransforms(), kamea: emptyModeTransforms() };
   sigilRevealed = false;
   clearDrawing();
   updateUndoButton();
-  updateGeometryLock();
   updateRevealButton();
   updateTransformControls();
   renderLettersReadout();
@@ -933,14 +923,13 @@ flipVBtn.addEventListener('click', () => {
 });
 
 resetTransformBtn.addEventListener('click', () => {
-  transformByMode[getSelectedMode()] = { angle: 0, flipH: false, flipV: false };
+  transformByGeoMode[getSelectedGeometry()][getSelectedMode()] = { angle: 0, flipH: false, flipV: false };
   updateTransformControls();
   redrawStrokes();
 });
 
 updateModeOptionStyles();
 updateGeometryOptionStyles();
-updateGeometryLock();
 updateRevealButton();
 updateTransformControls();
 
@@ -959,6 +948,22 @@ function pointerToCanvasPos(e) {
   return { x: e.clientX - rect.left, y: e.clientY - rect.top };
 }
 
+// El canvas es siempre cuadrado (mismo ancho y alto), así que basta
+// una sola división/multiplicación por su tamaño actual para pasar
+// de píxeles a una fracción 0–1 (y viceversa) sin deformar el trazo.
+// Guardar en la forma normalizada es lo que hace que un trazo
+// sobreviva a un cambio de tamaño del canvas: al redibujar, se vuelve
+// a escalar con el tamaño ACTUAL en vez de quedar con coordenadas de
+// un tamaño que ya no existe.
+function toNormalizedPoint(p) {
+  const size = canvasWrap.clientWidth;
+  return { x: p.x / size, y: p.y / size };
+}
+function toPixelPoint(p) {
+  const size = canvasWrap.clientWidth;
+  return { x: p.x * size, y: p.y * size };
+}
+
 drawCanvas.addEventListener('pointerdown', (e) => {
   if (currentLetters.length === 0) return; // nada que trazar todavía
 
@@ -972,13 +977,12 @@ drawCanvas.addEventListener('pointerdown', (e) => {
   // Dibujamos SIEMPRE en la posición real donde está el dedo (lastPoint,
   // sin transformar): así el trazo aparece exactamente bajo tu dedo,
   // esté o no rotado/invertido el sigilo en este momento. Pero lo que
-  // GUARDAMOS en currentStrokePoints es la posición "canónica" (la
-  // que tendría si el giro actual fuera 0°). Guardar la versión
-  // canónica es lo que evita que la rotación se "duplique": cuando
-  // más tarde muevas el slider, redrawStrokes() le aplica el nuevo
-  // ángulo a TODOS los puntos guardados (viejos y nuevos) por igual.
+  // GUARDAMOS en currentStrokePoints es la posición "canónica"
+  // (sin el giro actual) Y normalizada (fracción 0–1, no píxeles).
+  // Canónica evita que la rotación se "duplique"; normalizada evita
+  // que un cambio de tamaño del canvas desalinee el trazo.
   lastPoint = pointerToCanvasPos(e);
-  currentStrokePoints = [inverseTransform(lastPoint, currentTransform())];
+  currentStrokePoints = [toNormalizedPoint(inverseTransform(lastPoint, currentTransform()))];
   e.preventDefault();
 });
 
@@ -1000,7 +1004,7 @@ drawCanvas.addEventListener('pointermove', (e) => {
   drawCtx.lineJoin = 'round';
   drawCtx.stroke();
   lastPoint = point;
-  currentStrokePoints.push(inverseTransform(point, currentTransform()));
+  currentStrokePoints.push(toNormalizedPoint(inverseTransform(point, currentTransform())));
 });
 
 function stopDrawing(e) {
@@ -1015,7 +1019,6 @@ function stopDrawing(e) {
   if (currentStrokePoints && currentStrokePoints.length > 1) {
     currentStrokes().push(currentStrokePoints);
     updateUndoButton();
-    updateGeometryLock();
     updateTransformControls();
   }
   currentStrokePoints = null;
@@ -1029,20 +1032,14 @@ drawCanvas.addEventListener('pointerleave', stopDrawing);
 // 5. ARRANQUE
 // ---------------------------------------------------------------
 
+// Como los trazos se guardan normalizados (ver toNormalizedPoint),
+// un cambio de tamaño ya no necesita borrar nada: solo recalculamos
+// las medidas del canvas y volvemos a dibujar todo (fondo + trazo)
+// escalado al tamaño nuevo.
 window.addEventListener('resize', () => {
   resizeCanvases();
   drawBackground();
-  // Ningún trazo (de ningún modo) sobrevive a un cambio de tamaño:
-  // sus coordenadas quedarían desalineadas respecto a la nueva rueda.
-  strokesByMode = { guiado: [], libre: [] };
-  transformByMode = {
-    guiado: { angle: 0, flipH: false, flipV: false },
-    libre: { angle: 0, flipH: false, flipV: false },
-  };
-  clearDrawing();
-  updateUndoButton();
-  updateGeometryLock();
-  updateTransformControls();
+  redrawStrokes();
 });
 
 resizeCanvases();
