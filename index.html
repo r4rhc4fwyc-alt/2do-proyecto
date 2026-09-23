@@ -238,6 +238,7 @@ button:disabled {
     </div>
     <p class="hint" id="hintText">Genera un sigilo para empezar a trazar.</p>
     <div class="row" style="margin-top:10px;">
+      <button id="undoBtn" disabled>Deshacer</button>
       <button id="clearStrokeBtn">Limpiar trazo</button>
       <button id="resetBtn">Reiniciar todo</button>
     </div>
@@ -429,6 +430,7 @@ const lettersReadout = document.getElementById('lettersReadout');
 const modeInputs = document.querySelectorAll('input[name="mode"]');
 const modeGuiadoOption = document.getElementById('modeGuiadoOption');
 const modeLibreOption = document.getElementById('modeLibreOption');
+const undoBtn = document.getElementById('undoBtn');
 const clearStrokeBtn = document.getElementById('clearStrokeBtn');
 const resetBtn = document.getElementById('resetBtn');
 const hintText = document.getElementById('hintText');
@@ -438,6 +440,16 @@ const hintText = document.getElementById('hintText');
 // requisito es poder elegir el modo *antes* de empezar a trazar, no
 // a mitad de un trazo.
 let hasStartedDrawing = false;
+
+// Cada trazo completo (desde que apoyás el dedo hasta que lo
+// levantás) se guarda como una lista de puntos, no solo como
+// píxeles ya pintados. Así "Deshacer" puede quitar el último trazo
+// y volver a dibujar únicamente los anteriores.
+let strokes = [];
+
+function updateUndoButton() {
+  undoBtn.disabled = strokes.length === 0;
+}
 
 function getSelectedMode() {
   return document.querySelector('input[name="mode"]:checked').value;
@@ -467,7 +479,9 @@ function generateSigil() {
   currentLetters = reduceToSigil(phraseInput.value);
   hasStartedDrawing = false;
   setModeLocked(false);
+  strokes = [];
   clearDrawing();
+  updateUndoButton();
   renderLettersReadout();
   drawBackground();
   hintText.textContent = currentLetters.length
@@ -475,9 +489,31 @@ function generateSigil() {
     : 'La frase no produjo ninguna consonante utilizable. Prueba con otra.';
 }
 
+// Borra solo lo que se ve en el canvas de dibujo. No toca `strokes`:
+// quien llama decide si también hay que olvidar el historial.
 function clearDrawing() {
   const size = canvasWrap.clientWidth;
   drawCtx.clearRect(0, 0, size, size);
+}
+
+// Vuelve a pintar, desde cero, todos los trazos guardados en
+// `strokes`. Se usa después de deshacer, para que el dibujo en
+// pantalla coincida con el nuevo historial (sin el último trazo).
+function redrawStrokes() {
+  clearDrawing();
+  strokes.forEach(points => {
+    if (points.length < 2) return;
+    drawCtx.beginPath();
+    drawCtx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) {
+      drawCtx.lineTo(points[i].x, points[i].y);
+    }
+    drawCtx.strokeStyle = '#e7e9f0';
+    drawCtx.lineWidth = 3;
+    drawCtx.lineCap = 'round';
+    drawCtx.lineJoin = 'round';
+    drawCtx.stroke();
+  });
 }
 
 generateBtn.addEventListener('click', generateSigil);
@@ -489,8 +525,22 @@ modeInputs.forEach(input => {
   });
 });
 
+undoBtn.addEventListener('click', () => {
+  if (strokes.length === 0) return;
+  strokes.pop();
+  redrawStrokes();
+  updateUndoButton();
+  if (strokes.length === 0) {
+    // Volvimos al estado inicial: se puede elegir modo de nuevo.
+    hasStartedDrawing = false;
+    setModeLocked(false);
+  }
+});
+
 clearStrokeBtn.addEventListener('click', () => {
+  strokes = [];
   clearDrawing();
+  updateUndoButton();
   hasStartedDrawing = false;
   setModeLocked(false);
 });
@@ -498,9 +548,11 @@ clearStrokeBtn.addEventListener('click', () => {
 resetBtn.addEventListener('click', () => {
   phraseInput.value = '';
   currentLetters = [];
+  strokes = [];
   hasStartedDrawing = false;
   setModeLocked(false);
   clearDrawing();
+  updateUndoButton();
   renderLettersReadout();
   drawBackground();
   hintText.textContent = 'Genera un sigilo para empezar a trazar.';
@@ -514,6 +566,7 @@ updateModeOptionStyles();
 
 let isDrawing = false;
 let lastPoint = null;
+let currentStrokePoints = null; // puntos del trazo que se está dibujando ahora mismo
 
 // Convierte las coordenadas del evento (relativas a la ventana) a
 // coordenadas relativas al canvas.
@@ -535,6 +588,7 @@ drawCanvas.addEventListener('pointerdown', (e) => {
   drawCanvas.setPointerCapture(e.pointerId);
 
   lastPoint = pointerToCanvasPos(e);
+  currentStrokePoints = [lastPoint];
   e.preventDefault();
 });
 
@@ -556,12 +610,22 @@ drawCanvas.addEventListener('pointermove', (e) => {
   drawCtx.lineJoin = 'round';
   drawCtx.stroke();
   lastPoint = point;
+  currentStrokePoints.push(point);
 });
 
 function stopDrawing(e) {
   if (!isDrawing) return;
   isDrawing = false;
   lastPoint = null;
+
+  // Guardamos el trazo completo en el historial para que "Deshacer"
+  // pueda quitarlo más tarde. Un solo punto (un toque sin arrastrar)
+  // no dibuja ninguna línea, así que no vale la pena guardarlo.
+  if (currentStrokePoints && currentStrokePoints.length > 1) {
+    strokes.push(currentStrokePoints);
+    updateUndoButton();
+  }
+  currentStrokePoints = null;
 }
 
 drawCanvas.addEventListener('pointerup', stopDrawing);
@@ -575,7 +639,11 @@ drawCanvas.addEventListener('pointerleave', stopDrawing);
 window.addEventListener('resize', () => {
   resizeCanvases();
   drawBackground();
-  clearDrawing(); // el trazo libre no sobrevive a un cambio de tamaño
+  // El trazo no sobrevive a un cambio de tamaño: sus coordenadas
+  // quedarían desalineadas respecto a la nueva rueda.
+  strokes = [];
+  clearDrawing();
+  updateUndoButton();
 });
 
 resizeCanvases();
