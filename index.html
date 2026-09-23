@@ -451,20 +451,21 @@ const hintText = document.getElementById('hintText');
 // dibujan esos elementos, así que no hay nada que ocultar).
 let sigilRevealed = false;
 
-// true en cuanto el usuario apoya el dedo/lápiz por primera vez sobre
-// el trazo. Mientras sea true, bloqueamos el cambio de modo: el
-// requisito es poder elegir el modo *antes* de empezar a trazar, no
-// a mitad de un trazo.
-let hasStartedDrawing = false;
+// Cada modo tiene su propio historial de trazos, independiente del
+// otro. Así podés ir y venir entre guiado y libre para comparar cómo
+// se ve el sigilo en cada uno, sin que cambiar de modo borre nada:
+// simplemente mostramos el "cajón" de trazos que le corresponde al
+// modo activo. Cada trazo es una lista de puntos, no solo píxeles ya
+// pintados, para que "Deshacer" pueda quitar el último y repintar el
+// resto.
+let strokesByMode = { guiado: [], libre: [] };
 
-// Cada trazo completo (desde que apoyás el dedo hasta que lo
-// levantás) se guarda como una lista de puntos, no solo como
-// píxeles ya pintados. Así "Deshacer" puede quitar el último trazo
-// y volver a dibujar únicamente los anteriores.
-let strokes = [];
+function currentStrokes() {
+  return strokesByMode[getSelectedMode()];
+}
 
 function updateUndoButton() {
-  undoBtn.disabled = strokes.length === 0;
+  undoBtn.disabled = currentStrokes().length === 0;
 }
 
 // El botón "Visualizar sigilo" solo aparece en modo guiado y una vez
@@ -487,12 +488,6 @@ function updateModeOptionStyles() {
   modeLibreOption.classList.toggle('active', mode === 'libre');
 }
 
-function setModeLocked(locked) {
-  modeInputs.forEach(input => { input.disabled = locked; });
-  modeGuiadoOption.style.opacity = locked ? '0.5' : '1';
-  modeLibreOption.style.opacity = locked ? '0.5' : '1';
-}
-
 function renderLettersReadout() {
   if (currentLetters.length === 0) {
     lettersReadout.innerHTML = '<span class="empty">— genera un sigilo para ver las letras —</span>';
@@ -503,9 +498,9 @@ function renderLettersReadout() {
 
 function generateSigil() {
   currentLetters = reduceToSigil(phraseInput.value);
-  hasStartedDrawing = false;
-  setModeLocked(false);
-  strokes = [];
+  // Un sigilo nuevo cambia por completo la rueda: los trazos viejos
+  // (de cualquiera de los dos modos) ya no corresponderían a nada.
+  strokesByMode = { guiado: [], libre: [] };
   sigilRevealed = false;
   clearDrawing();
   updateUndoButton();
@@ -517,19 +512,20 @@ function generateSigil() {
     : 'La frase no produjo ninguna consonante utilizable. Prueba con otra.';
 }
 
-// Borra solo lo que se ve en el canvas de dibujo. No toca `strokes`:
-// quien llama decide si también hay que olvidar el historial.
+// Borra solo lo que se ve en el canvas de dibujo. No toca
+// `strokesByMode`: quien llama decide si también hay que olvidar
+// el historial.
 function clearDrawing() {
   const size = canvasWrap.clientWidth;
   drawCtx.clearRect(0, 0, size, size);
 }
 
-// Vuelve a pintar, desde cero, todos los trazos guardados en
-// `strokes`. Se usa después de deshacer, para que el dibujo en
-// pantalla coincida con el nuevo historial (sin el último trazo).
+// Vuelve a pintar, desde cero, los trazos guardados del modo activo.
+// Se usa al deshacer y al cambiar de modo, para que el dibujo en
+// pantalla siempre coincida con el historial de "este" modo.
 function redrawStrokes() {
   clearDrawing();
-  strokes.forEach(points => {
+  currentStrokes().forEach(points => {
     if (points.length < 2) return;
     drawCtx.beginPath();
     drawCtx.moveTo(points[0].x, points[0].y);
@@ -549,10 +545,14 @@ generateBtn.addEventListener('click', generateSigil);
 modeInputs.forEach(input => {
   input.addEventListener('change', () => {
     updateModeOptionStyles();
-    // Al cambiar de modo volvemos a mostrar la guía por defecto: no
-    // tendría sentido llegar a libre con el sigilo "revelado".
+    // Al cambiar de modo volvemos a mostrar la guía por defecto en
+    // guiado, y repintamos el trazo guardado de ESE modo (el del
+    // otro modo queda intacto en strokesByMode, esperando a que
+    // vuelvas).
     sigilRevealed = false;
     updateRevealButton();
+    updateUndoButton();
+    redrawStrokes();
     drawBackground();
   });
 });
@@ -564,32 +564,24 @@ revealBtn.addEventListener('click', () => {
 });
 
 undoBtn.addEventListener('click', () => {
+  const strokes = currentStrokes();
   if (strokes.length === 0) return;
   strokes.pop();
   redrawStrokes();
   updateUndoButton();
-  if (strokes.length === 0) {
-    // Volvimos al estado inicial: se puede elegir modo de nuevo.
-    hasStartedDrawing = false;
-    setModeLocked(false);
-  }
 });
 
 clearStrokeBtn.addEventListener('click', () => {
-  strokes = [];
+  strokesByMode[getSelectedMode()] = [];
   clearDrawing();
   updateUndoButton();
-  hasStartedDrawing = false;
-  setModeLocked(false);
 });
 
 resetBtn.addEventListener('click', () => {
   phraseInput.value = '';
   currentLetters = [];
-  strokes = [];
+  strokesByMode = { guiado: [], libre: [] };
   sigilRevealed = false;
-  hasStartedDrawing = false;
-  setModeLocked(false);
   clearDrawing();
   updateUndoButton();
   updateRevealButton();
@@ -620,8 +612,6 @@ drawCanvas.addEventListener('pointerdown', (e) => {
   if (currentLetters.length === 0) return; // nada que trazar todavía
 
   isDrawing = true;
-  hasStartedDrawing = true;
-  setModeLocked(true); // ya no se puede cambiar de modo a mitad de trazo
 
   // Captura el puntero: los siguientes eventos "move"/"up" llegan a
   // este elemento aunque el dedo se salga del canvas, evitando
@@ -659,11 +649,12 @@ function stopDrawing(e) {
   isDrawing = false;
   lastPoint = null;
 
-  // Guardamos el trazo completo en el historial para que "Deshacer"
-  // pueda quitarlo más tarde. Un solo punto (un toque sin arrastrar)
-  // no dibuja ninguna línea, así que no vale la pena guardarlo.
+  // Guardamos el trazo completo en el cajón del modo activo para que
+  // "Deshacer" pueda quitarlo más tarde. Un solo punto (un toque sin
+  // arrastrar) no dibuja ninguna línea, así que no vale la pena
+  // guardarlo.
   if (currentStrokePoints && currentStrokePoints.length > 1) {
-    strokes.push(currentStrokePoints);
+    currentStrokes().push(currentStrokePoints);
     updateUndoButton();
   }
   currentStrokePoints = null;
@@ -680,9 +671,9 @@ drawCanvas.addEventListener('pointerleave', stopDrawing);
 window.addEventListener('resize', () => {
   resizeCanvases();
   drawBackground();
-  // El trazo no sobrevive a un cambio de tamaño: sus coordenadas
-  // quedarían desalineadas respecto a la nueva rueda.
-  strokes = [];
+  // Ningún trazo (de ningún modo) sobrevive a un cambio de tamaño:
+  // sus coordenadas quedarían desalineadas respecto a la nueva rueda.
+  strokesByMode = { guiado: [], libre: [] };
   clearDrawing();
   updateUndoButton();
 });
