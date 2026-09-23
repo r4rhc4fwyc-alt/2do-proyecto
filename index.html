@@ -292,6 +292,294 @@ function reduceToSigil(text) {
   }
   return result;
 }
+
+// ---------------------------------------------------------------
+// 2. GEOMETRÍA DE LA RUEDA
+// ---------------------------------------------------------------
+
+// Elementos y estado del canvas. Los canvases son cuadrados y su
+// tamaño en píxeles reales se recalcula en resizeCanvases() para que
+// se vean nítidos también en pantallas de alta densidad (Retina/iPad).
+const canvasWrap = document.getElementById('canvasWrap');
+const bgCanvas = document.getElementById('bgCanvas');
+const drawCanvas = document.getElementById('drawCanvas');
+const bgCtx = bgCanvas.getContext('2d');
+const drawCtx = drawCanvas.getContext('2d');
+
+let wheelCenter = { x: 0, y: 0 };
+let wheelRadius = 0;
+let letterPositions = {}; // { 'A': {x, y}, 'B': {x, y}, ... }
+let currentLetters = [];  // resultado de reduceToSigil(), letras en orden
+
+// Ajusta la resolución interna del canvas a su tamaño real en
+// pantalla * devicePixelRatio, para que las líneas no se vean
+// borrosas en pantallas retina. Sin esto, un canvas de 300x300 CSS
+// pero dibujado a 300x300 px reales se ve pixelado en un iPad.
+function resizeCanvases() {
+  const size = canvasWrap.clientWidth;
+  const dpr = window.devicePixelRatio || 1;
+  [bgCanvas, drawCanvas].forEach(canvas => {
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+  });
+  bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  wheelCenter = { x: size / 2, y: size / 2 };
+  wheelRadius = size * 0.38;
+  letterPositions = computeLetterPositions(wheelCenter, wheelRadius);
+}
+
+// Distribuye las 27 letras en círculo, empezando por A en la parte
+// superior (las 12 en punto) y avanzando en sentido horario.
+//
+// Cada letra guarda dos coordenadas distintas:
+//   - point: el punto exacto SOBRE el círculo. Es el que se usa para
+//     el sigilo (líneas, numeración, trazo de referencia).
+//   - label: un poco más afuera del círculo. Es solo para que el
+//     texto de la letra no tape su propio punto.
+function computeLetterPositions(center, radius) {
+  const positions = {};
+  const n = ALPHABET.length;
+  const labelRadius = radius + 20;
+  ALPHABET.forEach((letter, i) => {
+    const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+    positions[letter] = {
+      point: {
+        x: center.x + radius * Math.cos(angle),
+        y: center.y + radius * Math.sin(angle),
+      },
+      label: {
+        x: center.x + labelRadius * Math.cos(angle),
+        y: center.y + labelRadius * Math.sin(angle),
+      },
+    };
+  });
+  return positions;
+}
+
+// Dibuja el fondo: el círculo guía, las 27 letras del alfabeto, y
+// (si ya hay un sigilo generado) los puntos que le corresponden,
+// con numeración y línea tenue solo cuando el modo es "guiado".
+function drawBackground() {
+  const size = canvasWrap.clientWidth;
+  bgCtx.clearRect(0, 0, size, size);
+
+  // Círculo guía.
+  bgCtx.beginPath();
+  bgCtx.arc(wheelCenter.x, wheelCenter.y, wheelRadius, 0, Math.PI * 2);
+  bgCtx.strokeStyle = '#262b3a';
+  bgCtx.lineWidth = 1;
+  bgCtx.stroke();
+
+  // Las 27 letras, como referencia de fondo.
+  bgCtx.font = '13px -apple-system, sans-serif';
+  bgCtx.textAlign = 'center';
+  bgCtx.textBaseline = 'middle';
+  ALPHABET.forEach(letter => {
+    const { point, label } = letterPositions[letter];
+    const isActive = currentLetters.includes(letter);
+
+    // Etiqueta con el nombre de la letra, un poco afuera del círculo.
+    bgCtx.fillStyle = isActive ? '#c9a24b' : '#4a5066';
+    bgCtx.fillText(letter, label.x, label.y);
+
+    // Punto exacto sobre el círculo: es la posición real que usa el sigilo.
+    bgCtx.beginPath();
+    bgCtx.arc(point.x, point.y, isActive ? 3.5 : 1.5, 0, Math.PI * 2);
+    bgCtx.fillStyle = isActive ? '#c9a24b' : '#333a4d';
+    bgCtx.fill();
+  });
+
+  if (currentLetters.length === 0) return;
+
+  const mode = getSelectedMode();
+
+  if (mode === 'guiado') {
+    // Línea tenue conectando los puntos en el orden de la reducción.
+    bgCtx.beginPath();
+    currentLetters.forEach((letter, i) => {
+      const { point } = letterPositions[letter];
+      if (i === 0) bgCtx.moveTo(point.x, point.y);
+      else bgCtx.lineTo(point.x, point.y);
+    });
+    bgCtx.strokeStyle = 'rgba(201, 162, 75, 0.35)';
+    bgCtx.lineWidth = 1.5;
+    bgCtx.stroke();
+
+    // Número de orden junto a cada punto.
+    currentLetters.forEach((letter, i) => {
+      const { point } = letterPositions[letter];
+      bgCtx.fillStyle = '#e7e9f0';
+      bgCtx.font = '11px -apple-system, sans-serif';
+      bgCtx.fillText(String(i + 1), point.x + 10, point.y - 10);
+    });
+  }
+  // En modo "libre" no se dibuja línea ni números: los puntos
+  // (ya marcados arriba como isActive) quedan como única referencia.
+}
+
+// ---------------------------------------------------------------
+// 3. CONTROLES: generar sigilo, elegir modo, limpiar
+// ---------------------------------------------------------------
+
+const phraseInput = document.getElementById('phraseInput');
+const generateBtn = document.getElementById('generateBtn');
+const lettersReadout = document.getElementById('lettersReadout');
+const modeInputs = document.querySelectorAll('input[name="mode"]');
+const modeGuiadoOption = document.getElementById('modeGuiadoOption');
+const modeLibreOption = document.getElementById('modeLibreOption');
+const clearStrokeBtn = document.getElementById('clearStrokeBtn');
+const resetBtn = document.getElementById('resetBtn');
+const hintText = document.getElementById('hintText');
+
+// true en cuanto el usuario apoya el dedo/lápiz por primera vez sobre
+// el trazo. Mientras sea true, bloqueamos el cambio de modo: el
+// requisito es poder elegir el modo *antes* de empezar a trazar, no
+// a mitad de un trazo.
+let hasStartedDrawing = false;
+
+function getSelectedMode() {
+  return document.querySelector('input[name="mode"]:checked').value;
+}
+
+function updateModeOptionStyles() {
+  const mode = getSelectedMode();
+  modeGuiadoOption.classList.toggle('active', mode === 'guiado');
+  modeLibreOption.classList.toggle('active', mode === 'libre');
+}
+
+function setModeLocked(locked) {
+  modeInputs.forEach(input => { input.disabled = locked; });
+  modeGuiadoOption.style.opacity = locked ? '0.5' : '1';
+  modeLibreOption.style.opacity = locked ? '0.5' : '1';
+}
+
+function renderLettersReadout() {
+  if (currentLetters.length === 0) {
+    lettersReadout.innerHTML = '<span class="empty">— genera un sigilo para ver las letras —</span>';
+  } else {
+    lettersReadout.textContent = currentLetters.join(' · ');
+  }
+}
+
+function generateSigil() {
+  currentLetters = reduceToSigil(phraseInput.value);
+  hasStartedDrawing = false;
+  setModeLocked(false);
+  clearDrawing();
+  renderLettersReadout();
+  drawBackground();
+  hintText.textContent = currentLetters.length
+    ? 'Traza el sigilo con el dedo o el lápiz sobre el canvas.'
+    : 'La frase no produjo ninguna consonante utilizable. Prueba con otra.';
+}
+
+function clearDrawing() {
+  const size = canvasWrap.clientWidth;
+  drawCtx.clearRect(0, 0, size, size);
+}
+
+generateBtn.addEventListener('click', generateSigil);
+
+modeInputs.forEach(input => {
+  input.addEventListener('change', () => {
+    updateModeOptionStyles();
+    drawBackground(); // redibuja mostrando/ocultando la línea guía
+  });
+});
+
+clearStrokeBtn.addEventListener('click', () => {
+  clearDrawing();
+  hasStartedDrawing = false;
+  setModeLocked(false);
+});
+
+resetBtn.addEventListener('click', () => {
+  phraseInput.value = '';
+  currentLetters = [];
+  hasStartedDrawing = false;
+  setModeLocked(false);
+  clearDrawing();
+  renderLettersReadout();
+  drawBackground();
+  hintText.textContent = 'Genera un sigilo para empezar a trazar.';
+});
+
+updateModeOptionStyles();
+
+// ---------------------------------------------------------------
+// 4. DIBUJO A MANO: Pointer Events (mouse, dedo y lápiz)
+// ---------------------------------------------------------------
+
+let isDrawing = false;
+let lastPoint = null;
+
+// Convierte las coordenadas del evento (relativas a la ventana) a
+// coordenadas relativas al canvas.
+function pointerToCanvasPos(e) {
+  const rect = drawCanvas.getBoundingClientRect();
+  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+}
+
+drawCanvas.addEventListener('pointerdown', (e) => {
+  if (currentLetters.length === 0) return; // nada que trazar todavía
+
+  isDrawing = true;
+  hasStartedDrawing = true;
+  setModeLocked(true); // ya no se puede cambiar de modo a mitad de trazo
+
+  // Captura el puntero: los siguientes eventos "move"/"up" llegan a
+  // este elemento aunque el dedo se salga del canvas, evitando
+  // trazos que se cortan en el borde.
+  drawCanvas.setPointerCapture(e.pointerId);
+
+  lastPoint = pointerToCanvasPos(e);
+  e.preventDefault();
+});
+
+drawCanvas.addEventListener('pointermove', (e) => {
+  if (!isDrawing) return;
+
+  // Fundamental para iPad/Safari: sin esto, el navegador puede
+  // interpretar el arrastre como un gesto de scroll o navegación
+  // aunque touch-action:none ya esté puesto en el CSS.
+  e.preventDefault();
+
+  const point = pointerToCanvasPos(e);
+  drawCtx.beginPath();
+  drawCtx.moveTo(lastPoint.x, lastPoint.y);
+  drawCtx.lineTo(point.x, point.y);
+  drawCtx.strokeStyle = '#e7e9f0';
+  drawCtx.lineWidth = 3;
+  drawCtx.lineCap = 'round';
+  drawCtx.lineJoin = 'round';
+  drawCtx.stroke();
+  lastPoint = point;
+});
+
+function stopDrawing(e) {
+  if (!isDrawing) return;
+  isDrawing = false;
+  lastPoint = null;
+}
+
+drawCanvas.addEventListener('pointerup', stopDrawing);
+drawCanvas.addEventListener('pointercancel', stopDrawing);
+drawCanvas.addEventListener('pointerleave', stopDrawing);
+
+// ---------------------------------------------------------------
+// 5. ARRANQUE
+// ---------------------------------------------------------------
+
+window.addEventListener('resize', () => {
+  resizeCanvases();
+  drawBackground();
+  clearDrawing(); // el trazo libre no sobrevive a un cambio de tamaño
+});
+
+resizeCanvases();
+drawBackground();
 </script>
 </body>
 </html>
