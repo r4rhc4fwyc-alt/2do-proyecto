@@ -226,6 +226,26 @@ input[type="range"]:disabled {
   </div>
 
   <div class="panel">
+    <label>Geometría</label>
+    <div class="mode-select">
+      <label class="mode-option" id="geometryRuedaOption">
+        <input type="radio" name="geometry" value="rueda" checked>
+        <span>
+          <span class="label">Rueda</span>
+          <span class="desc">Las 27 letras distribuidas en círculo.</span>
+        </span>
+      </label>
+      <label class="mode-option" id="geometryKameaOption">
+        <input type="radio" name="geometry" value="kamea">
+        <span>
+          <span class="label">Kamea</span>
+          <span class="desc">Cuadrado mágico de Mercurio, 8×8.</span>
+        </span>
+      </label>
+    </div>
+  </div>
+
+  <div class="panel">
     <label>Modo de trazo</label>
     <div class="mode-select">
       <label class="mode-option" id="modeGuiadoOption">
@@ -388,6 +408,13 @@ function computeLetterPositions(center, radius) {
 // (si ya hay un sigilo generado) los puntos que le corresponden,
 // con numeración y línea tenue solo cuando el modo es "guiado".
 function drawBackground() {
+  // Geometría kamea: se dibuja aparte y no se toca nada de lo que
+  // sigue, que es exclusivamente el dibujo de la rueda.
+  if (getSelectedGeometry() === 'kamea') {
+    drawKameaBackground();
+    return;
+  }
+
   const size = canvasWrap.clientWidth;
   bgCtx.clearRect(0, 0, size, size);
 
@@ -449,6 +476,141 @@ function drawBackground() {
 }
 
 // ---------------------------------------------------------------
+// 2.5. GEOMETRÍA KAMEA (cuadrado mágico de Mercurio, 8×8)
+// ---------------------------------------------------------------
+// Segunda geometría, alternativa a la rueda. Esta sección es
+// completamente independiente de la rueda de arriba (no la toca ni
+// reutiliza sus funciones): calcula y dibuja su propia grilla. Lo
+// único que conecta ambas es drawBackground(), que más abajo decide
+// cuál de las dos llamar según la geometría elegida.
+
+// El kamea clásico de Mercurio de la tradición hermética: un
+// cuadrado mágico 8×8 con los números 1 a 64, donde cada fila,
+// columna y diagonal suma 260 (la "constante mágica" de Mercurio).
+const KAMEA_LAYOUT = [
+  [8, 58, 59, 5, 4, 62, 63, 1],
+  [49, 15, 14, 52, 53, 11, 10, 56],
+  [41, 23, 22, 44, 45, 19, 18, 48],
+  [32, 34, 35, 29, 28, 38, 39, 25],
+  [40, 26, 27, 37, 36, 30, 31, 33],
+  [17, 47, 46, 20, 21, 43, 42, 24],
+  [9, 55, 54, 12, 13, 51, 50, 16],
+  [64, 2, 3, 61, 60, 6, 7, 57],
+];
+
+// Índice inverso: dado un número del 1 al 64, en qué fila/columna
+// de la grilla está.
+const KAMEA_CELL_OF_NUMBER = {};
+KAMEA_LAYOUT.forEach((row, r) => {
+  row.forEach((num, c) => {
+    KAMEA_CELL_OF_NUMBER[num] = { row: r, col: c };
+  });
+});
+
+// La misma posición alfabética que ya usa la rueda para repartir las
+// letras en el círculo (A=1, B=2, ... Ñ en su lugar, ... Z=27) es,
+// en el kamea, directamente el número de celda de esa letra.
+const ALPHA_INDEX = {};
+ALPHABET.forEach((letter, i) => { ALPHA_INDEX[letter] = i + 1; });
+
+function getSelectedGeometry() {
+  return document.querySelector('input[name="geometry"]:checked').value;
+}
+
+// Dibuja la grilla de 64 celdas con sus números, resalta las que
+// corresponden a letras del sigilo actual y, en modo guiado (sin
+// "Visualizar sigilo" activo), conecta esas celdas en orden con una
+// línea tenue y numeración — el mismo lenguaje visual que la rueda,
+// pero sobre la grilla del kamea.
+function drawKameaBackground() {
+  const size = canvasWrap.clientWidth;
+  bgCtx.clearRect(0, 0, size, size);
+
+  const gridSize = size * 0.86;
+  const cellSize = gridSize / 8;
+  const origin = (size - gridSize) / 2;
+
+  function cellCenter(num) {
+    const cell = KAMEA_CELL_OF_NUMBER[num];
+    return {
+      x: origin + cell.col * cellSize + cellSize / 2,
+      y: origin + cell.row * cellSize + cellSize / 2,
+    };
+  }
+
+  // Qué números están "activos" (forman parte del sigilo actual).
+  // Con "Visualizar sigilo" puesto, tratamos la grilla como si no
+  // hubiera ninguno activo, igual que hace la rueda.
+  const activeLetterOfNumber = {};
+  if (!sigilRevealed) {
+    currentLetters.forEach(letter => {
+      activeLetterOfNumber[ALPHA_INDEX[letter]] = letter;
+    });
+  }
+
+  // Fondo resaltado de las celdas activas, dibujado antes que las
+  // líneas de la grilla para que el borde quede nítido encima.
+  for (let num = 1; num <= 64; num++) {
+    if (!activeLetterOfNumber[num]) continue;
+    const cell = KAMEA_CELL_OF_NUMBER[num];
+    bgCtx.fillStyle = 'rgba(201, 162, 75, 0.15)';
+    bgCtx.fillRect(origin + cell.col * cellSize, origin + cell.row * cellSize, cellSize, cellSize);
+  }
+
+  // Líneas de la grilla (9 líneas verticales + 9 horizontales para 8x8 celdas).
+  bgCtx.strokeStyle = '#262b3a';
+  bgCtx.lineWidth = 1;
+  for (let i = 0; i <= 8; i++) {
+    const x = origin + i * cellSize;
+    bgCtx.beginPath();
+    bgCtx.moveTo(x, origin);
+    bgCtx.lineTo(x, origin + gridSize);
+    bgCtx.stroke();
+    const y = origin + i * cellSize;
+    bgCtx.beginPath();
+    bgCtx.moveTo(origin, y);
+    bgCtx.lineTo(origin + gridSize, y);
+    bgCtx.stroke();
+  }
+
+  // Los 64 números, uno por celda.
+  bgCtx.textAlign = 'center';
+  bgCtx.textBaseline = 'middle';
+  bgCtx.font = `${Math.max(10, cellSize * 0.28)}px -apple-system, sans-serif`;
+  for (let num = 1; num <= 64; num++) {
+    const isActive = Boolean(activeLetterOfNumber[num]);
+    const p = cellCenter(num);
+    bgCtx.fillStyle = isActive ? '#c9a24b' : '#4a5066';
+    bgCtx.fillText(String(num), p.x, p.y);
+  }
+
+  if (currentLetters.length === 0) return;
+
+  if (getSelectedMode() === 'guiado' && !sigilRevealed) {
+    // Línea tenue conectando las celdas en el orden de la reducción.
+    bgCtx.beginPath();
+    currentLetters.forEach((letter, i) => {
+      const p = cellCenter(ALPHA_INDEX[letter]);
+      if (i === 0) bgCtx.moveTo(p.x, p.y);
+      else bgCtx.lineTo(p.x, p.y);
+    });
+    bgCtx.strokeStyle = 'rgba(201, 162, 75, 0.35)';
+    bgCtx.lineWidth = 1.5;
+    bgCtx.stroke();
+
+    // Número de orden junto a cada celda activa.
+    currentLetters.forEach((letter, i) => {
+      const p = cellCenter(ALPHA_INDEX[letter]);
+      bgCtx.fillStyle = '#e7e9f0';
+      bgCtx.font = '11px -apple-system, sans-serif';
+      bgCtx.fillText(String(i + 1), p.x + cellSize * 0.32, p.y - cellSize * 0.32);
+    });
+  }
+  // En modo "libre" no se dibuja línea ni números: las celdas activas
+  // (ya resaltadas arriba) quedan como única referencia.
+}
+
+// ---------------------------------------------------------------
 // 3. CONTROLES: generar sigilo, elegir modo, limpiar
 // ---------------------------------------------------------------
 
@@ -458,6 +620,9 @@ const lettersReadout = document.getElementById('lettersReadout');
 const modeInputs = document.querySelectorAll('input[name="mode"]');
 const modeGuiadoOption = document.getElementById('modeGuiadoOption');
 const modeLibreOption = document.getElementById('modeLibreOption');
+const geometryInputs = document.querySelectorAll('input[name="geometry"]');
+const geometryRuedaOption = document.getElementById('geometryRuedaOption');
+const geometryKameaOption = document.getElementById('geometryKameaOption');
 const revealBtn = document.getElementById('revealBtn');
 const undoBtn = document.getElementById('undoBtn');
 const clearStrokeBtn = document.getElementById('clearStrokeBtn');
@@ -581,6 +746,28 @@ function updateModeOptionStyles() {
   modeLibreOption.classList.toggle('active', mode === 'libre');
 }
 
+function updateGeometryOptionStyles() {
+  const geometry = getSelectedGeometry();
+  geometryRuedaOption.classList.toggle('active', geometry === 'rueda');
+  geometryKameaOption.classList.toggle('active', geometry === 'kamea');
+}
+
+// A diferencia del modo (guiado/libre), que se puede cambiar en
+// cualquier momento para comparar, cambiar de GEOMETRÍA sí invalida
+// todo lo dibujado (rueda y kamea son sistemas de coordenadas
+// completamente distintos). Por eso el selector de geometría se
+// bloquea apenas hay algún trazo, en cualquiera de los dos modos.
+function setGeometryLocked(locked) {
+  geometryInputs.forEach(input => { input.disabled = locked; });
+  geometryRuedaOption.style.opacity = locked ? '0.5' : '1';
+  geometryKameaOption.style.opacity = locked ? '0.5' : '1';
+}
+
+function updateGeometryLock() {
+  const anyStrokes = strokesByMode.guiado.length > 0 || strokesByMode.libre.length > 0;
+  setGeometryLocked(anyStrokes);
+}
+
 function renderLettersReadout() {
   if (currentLetters.length === 0) {
     lettersReadout.innerHTML = '<span class="empty">— genera un sigilo para ver las letras —</span>';
@@ -601,6 +788,7 @@ function generateSigil() {
   sigilRevealed = false;
   clearDrawing();
   updateUndoButton();
+  updateGeometryLock();
   updateRevealButton();
   updateTransformControls();
   renderLettersReadout();
@@ -658,6 +846,29 @@ modeInputs.forEach(input => {
   });
 });
 
+// Cambiar de geometría (rueda <-> kamea) sí invalida todo lo
+// dibujado en AMBOS modos, porque las coordenadas de un sistema no
+// significan nada en el otro. El selector ya está bloqueado mientras
+// haya trazos (ver updateGeometryLock), así que este reseteo total
+// solo puede pasar con el canvas vacío de todas formas.
+geometryInputs.forEach(input => {
+  input.addEventListener('change', () => {
+    updateGeometryOptionStyles();
+    strokesByMode = { guiado: [], libre: [] };
+    transformByMode = {
+      guiado: { angle: 0, flipH: false, flipV: false },
+      libre: { angle: 0, flipH: false, flipV: false },
+    };
+    sigilRevealed = false;
+    clearDrawing();
+    updateUndoButton();
+    updateGeometryLock();
+    updateRevealButton();
+    updateTransformControls();
+    drawBackground();
+  });
+});
+
 revealBtn.addEventListener('click', () => {
   sigilRevealed = !sigilRevealed;
   updateRevealButton();
@@ -670,6 +881,7 @@ undoBtn.addEventListener('click', () => {
   strokes.pop();
   redrawStrokes();
   updateUndoButton();
+  updateGeometryLock();
 });
 
 clearStrokeBtn.addEventListener('click', () => {
@@ -677,6 +889,7 @@ clearStrokeBtn.addEventListener('click', () => {
   transformByMode[getSelectedMode()] = { angle: 0, flipH: false, flipV: false };
   clearDrawing();
   updateUndoButton();
+  updateGeometryLock();
   updateTransformControls();
 });
 
@@ -691,6 +904,7 @@ resetBtn.addEventListener('click', () => {
   sigilRevealed = false;
   clearDrawing();
   updateUndoButton();
+  updateGeometryLock();
   updateRevealButton();
   updateTransformControls();
   renderLettersReadout();
@@ -725,6 +939,8 @@ resetTransformBtn.addEventListener('click', () => {
 });
 
 updateModeOptionStyles();
+updateGeometryOptionStyles();
+updateGeometryLock();
 updateRevealButton();
 updateTransformControls();
 
@@ -799,6 +1015,7 @@ function stopDrawing(e) {
   if (currentStrokePoints && currentStrokePoints.length > 1) {
     currentStrokes().push(currentStrokePoints);
     updateUndoButton();
+    updateGeometryLock();
     updateTransformControls();
   }
   currentStrokePoints = null;
@@ -824,6 +1041,7 @@ window.addEventListener('resize', () => {
   };
   clearDrawing();
   updateUndoButton();
+  updateGeometryLock();
   updateTransformControls();
 });
 
