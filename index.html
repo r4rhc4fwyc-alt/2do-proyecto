@@ -111,6 +111,15 @@ button[aria-pressed="true"] {
   color: var(--accent);
 }
 
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+input[type="range"]:disabled {
+  opacity: 0.4;
+}
+
 .row {
   display: flex;
   gap: 10px;
@@ -247,6 +256,16 @@ button[aria-pressed="true"] {
       <button id="undoBtn" disabled>Deshacer</button>
       <button id="clearStrokeBtn">Limpiar trazo</button>
       <button id="resetBtn">Reiniciar todo</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <label for="rotationSlider">Girar sigilo (<span id="rotationValue">0</span>°)</label>
+    <input type="range" id="rotationSlider" min="0" max="359" step="1" value="0" disabled>
+    <div class="row" style="margin-top:10px;">
+      <button id="flipHBtn" disabled>Invertir horizontal</button>
+      <button id="flipVBtn" disabled>Invertir vertical</button>
+      <button id="resetTransformBtn" disabled>Restablecer giro</button>
     </div>
   </div>
 </div>
@@ -444,6 +463,62 @@ const undoBtn = document.getElementById('undoBtn');
 const clearStrokeBtn = document.getElementById('clearStrokeBtn');
 const resetBtn = document.getElementById('resetBtn');
 const hintText = document.getElementById('hintText');
+const rotationSlider = document.getElementById('rotationSlider');
+const rotationValue = document.getElementById('rotationValue');
+const flipHBtn = document.getElementById('flipHBtn');
+const flipVBtn = document.getElementById('flipVBtn');
+const resetTransformBtn = document.getElementById('resetTransformBtn');
+
+// Ajuste estético del sigilo YA DIBUJADO: girarlo y/o invertirlo.
+// Cada modo tiene el suyo propio, igual que sus trazos. Los puntos
+// que guardamos en strokesByMode NUNCA cambian por esto: el ángulo y
+// las inversiones se aplican solo al momento de dibujar en pantalla
+// (ver applyTransform/redrawStrokes), así que mover el control es
+// no-destructivo y se puede deshacer volviendo a 0°.
+let transformByMode = {
+  guiado: { angle: 0, flipH: false, flipV: false },
+  libre: { angle: 0, flipH: false, flipV: false },
+};
+
+function currentTransform() {
+  return transformByMode[getSelectedMode()];
+}
+
+// Convierte un punto "tal como se guardó" (sin rotar) en la posición
+// donde debe dibujarse en pantalla, aplicando el giro/inversión
+// actuales alrededor del centro de la rueda.
+function applyTransform(point, t) {
+  let dx = point.x - wheelCenter.x;
+  let dy = point.y - wheelCenter.y;
+  if (t.flipH) dx = -dx;
+  if (t.flipV) dy = -dy;
+  const rad = (t.angle * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return {
+    x: wheelCenter.x + (dx * cos - dy * sin),
+    y: wheelCenter.y + (dx * sin + dy * cos),
+  };
+}
+
+// La operación inversa: dado un punto tal como aparece en pantalla
+// (donde tocaste con el dedo), calcula qué punto "sin rotar" hay que
+// guardar para que, al aplicarle el giro actual, vuelva a caer
+// exactamente donde tocaste. Así, si ya rotaste el sigilo y seguís
+// dibujando, el trazo nuevo aparece bajo tu dedo sin saltos ni
+// duplicar la rotación.
+function inverseTransform(point, t) {
+  let dx = point.x - wheelCenter.x;
+  let dy = point.y - wheelCenter.y;
+  const rad = (-t.angle * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  let rx = dx * cos - dy * sin;
+  let ry = dx * sin + dy * cos;
+  if (t.flipH) rx = -rx;
+  if (t.flipV) ry = -ry;
+  return { x: wheelCenter.x + rx, y: wheelCenter.y + ry };
+}
 
 // true mientras el usuario pidió "ver el sigilo limpio": oculta el
 // resaltado de puntos, la numeración y la línea guía en la rueda de
@@ -466,6 +541,24 @@ function currentStrokes() {
 
 function updateUndoButton() {
   undoBtn.disabled = currentStrokes().length === 0;
+}
+
+// Los controles de giro/inversión solo tienen sentido si hay algo
+// dibujado en el modo activo. Además de habilitarlos/deshabilitarlos,
+// sincroniza el slider y el estado visual de los botones con el
+// transform guardado para ESTE modo (importante al cambiar de modo:
+// cada uno recuerda su propio giro).
+function updateTransformControls() {
+  const hasStrokes = currentStrokes().length > 0;
+  const t = currentTransform();
+  rotationSlider.disabled = !hasStrokes;
+  flipHBtn.disabled = !hasStrokes;
+  flipVBtn.disabled = !hasStrokes;
+  resetTransformBtn.disabled = !hasStrokes;
+  rotationSlider.value = t.angle;
+  rotationValue.textContent = t.angle;
+  flipHBtn.setAttribute('aria-pressed', String(t.flipH));
+  flipVBtn.setAttribute('aria-pressed', String(t.flipV));
 }
 
 // El botón "Visualizar sigilo" solo aparece en modo guiado y una vez
@@ -501,10 +594,15 @@ function generateSigil() {
   // Un sigilo nuevo cambia por completo la rueda: los trazos viejos
   // (de cualquiera de los dos modos) ya no corresponderían a nada.
   strokesByMode = { guiado: [], libre: [] };
+  transformByMode = {
+    guiado: { angle: 0, flipH: false, flipV: false },
+    libre: { angle: 0, flipH: false, flipV: false },
+  };
   sigilRevealed = false;
   clearDrawing();
   updateUndoButton();
   updateRevealButton();
+  updateTransformControls();
   renderLettersReadout();
   drawBackground();
   hintText.textContent = currentLetters.length
@@ -525,8 +623,10 @@ function clearDrawing() {
 // pantalla siempre coincida con el historial de "este" modo.
 function redrawStrokes() {
   clearDrawing();
-  currentStrokes().forEach(points => {
-    if (points.length < 2) return;
+  const t = currentTransform();
+  currentStrokes().forEach(rawPoints => {
+    if (rawPoints.length < 2) return;
+    const points = rawPoints.map(p => applyTransform(p, t));
     drawCtx.beginPath();
     drawCtx.moveTo(points[0].x, points[0].y);
     for (let i = 1; i < points.length; i++) {
@@ -546,12 +646,13 @@ modeInputs.forEach(input => {
   input.addEventListener('change', () => {
     updateModeOptionStyles();
     // Al cambiar de modo volvemos a mostrar la guía por defecto en
-    // guiado, y repintamos el trazo guardado de ESE modo (el del
-    // otro modo queda intacto en strokesByMode, esperando a que
-    // vuelvas).
+    // guiado, y repintamos el trazo guardado de ESE modo con SU
+    // PROPIO giro/inversión (el del otro modo queda intacto,
+    // esperando a que vuelvas).
     sigilRevealed = false;
     updateRevealButton();
     updateUndoButton();
+    updateTransformControls();
     redrawStrokes();
     drawBackground();
   });
@@ -573,25 +674,59 @@ undoBtn.addEventListener('click', () => {
 
 clearStrokeBtn.addEventListener('click', () => {
   strokesByMode[getSelectedMode()] = [];
+  transformByMode[getSelectedMode()] = { angle: 0, flipH: false, flipV: false };
   clearDrawing();
   updateUndoButton();
+  updateTransformControls();
 });
 
 resetBtn.addEventListener('click', () => {
   phraseInput.value = '';
   currentLetters = [];
   strokesByMode = { guiado: [], libre: [] };
+  transformByMode = {
+    guiado: { angle: 0, flipH: false, flipV: false },
+    libre: { angle: 0, flipH: false, flipV: false },
+  };
   sigilRevealed = false;
   clearDrawing();
   updateUndoButton();
   updateRevealButton();
+  updateTransformControls();
   renderLettersReadout();
   drawBackground();
   hintText.textContent = 'Genera un sigilo para empezar a trazar.';
 });
 
+rotationSlider.addEventListener('input', () => {
+  currentTransform().angle = Number(rotationSlider.value);
+  rotationValue.textContent = rotationSlider.value;
+  redrawStrokes();
+});
+
+flipHBtn.addEventListener('click', () => {
+  const t = currentTransform();
+  t.flipH = !t.flipH;
+  updateTransformControls();
+  redrawStrokes();
+});
+
+flipVBtn.addEventListener('click', () => {
+  const t = currentTransform();
+  t.flipV = !t.flipV;
+  updateTransformControls();
+  redrawStrokes();
+});
+
+resetTransformBtn.addEventListener('click', () => {
+  transformByMode[getSelectedMode()] = { angle: 0, flipH: false, flipV: false };
+  updateTransformControls();
+  redrawStrokes();
+});
+
 updateModeOptionStyles();
 updateRevealButton();
+updateTransformControls();
 
 // ---------------------------------------------------------------
 // 4. DIBUJO A MANO: Pointer Events (mouse, dedo y lápiz)
@@ -618,8 +753,16 @@ drawCanvas.addEventListener('pointerdown', (e) => {
   // trazos que se cortan en el borde.
   drawCanvas.setPointerCapture(e.pointerId);
 
+  // Dibujamos SIEMPRE en la posición real donde está el dedo (lastPoint,
+  // sin transformar): así el trazo aparece exactamente bajo tu dedo,
+  // esté o no rotado/invertido el sigilo en este momento. Pero lo que
+  // GUARDAMOS en currentStrokePoints es la posición "canónica" (la
+  // que tendría si el giro actual fuera 0°). Guardar la versión
+  // canónica es lo que evita que la rotación se "duplique": cuando
+  // más tarde muevas el slider, redrawStrokes() le aplica el nuevo
+  // ángulo a TODOS los puntos guardados (viejos y nuevos) por igual.
   lastPoint = pointerToCanvasPos(e);
-  currentStrokePoints = [lastPoint];
+  currentStrokePoints = [inverseTransform(lastPoint, currentTransform())];
   e.preventDefault();
 });
 
@@ -641,7 +784,7 @@ drawCanvas.addEventListener('pointermove', (e) => {
   drawCtx.lineJoin = 'round';
   drawCtx.stroke();
   lastPoint = point;
-  currentStrokePoints.push(point);
+  currentStrokePoints.push(inverseTransform(point, currentTransform()));
 });
 
 function stopDrawing(e) {
@@ -656,6 +799,7 @@ function stopDrawing(e) {
   if (currentStrokePoints && currentStrokePoints.length > 1) {
     currentStrokes().push(currentStrokePoints);
     updateUndoButton();
+    updateTransformControls();
   }
   currentStrokePoints = null;
 }
@@ -674,8 +818,13 @@ window.addEventListener('resize', () => {
   // Ningún trazo (de ningún modo) sobrevive a un cambio de tamaño:
   // sus coordenadas quedarían desalineadas respecto a la nueva rueda.
   strokesByMode = { guiado: [], libre: [] };
+  transformByMode = {
+    guiado: { angle: 0, flipH: false, flipV: false },
+    libre: { angle: 0, flipH: false, flipV: false },
+  };
   clearDrawing();
   updateUndoButton();
+  updateTransformControls();
 });
 
 resizeCanvases();
