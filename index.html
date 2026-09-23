@@ -1,0 +1,1049 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Generador de sigilos</title>
+<style>
+:root {
+  --bg: #0b0d14;
+  --panel: #12151f;
+  --border: #262b3a;
+  --text: #e7e9f0;
+  --muted: #8a90a6;
+  --accent: #c9a24b;
+  --accent-dim: rgba(201, 162, 75, 0.35);
+  --danger: #d16464;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  /* evita que el navegador haga scroll/bounce mientras se dibuja en el canvas */
+  overscroll-behavior: none;
+}
+
+.app {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 20px 16px 48px;
+}
+
+h1 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  margin: 0 0 4px;
+  letter-spacing: 0.02em;
+}
+
+.subtitle {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0 0 20px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+textarea {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  background: #0d1018;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 1rem;
+  padding: 10px;
+  font-family: inherit;
+}
+
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+button {
+  font-family: inherit;
+  font-size: 0.9rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #1a1e2b;
+  color: var(--text);
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+button:hover { border-color: var(--accent); }
+button:active { transform: translateY(1px); }
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1a1608;
+  font-weight: 600;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+input[type="range"]:disabled {
+  opacity: 0.4;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mode-select {
+  display: flex;
+  gap: 10px;
+}
+
+.mode-option {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  background: #0d1018;
+}
+
+.mode-option.active {
+  border-color: var(--accent);
+  background: rgba(201, 162, 75, 0.08);
+}
+
+.mode-option input {
+  margin-top: 3px;
+}
+
+.mode-option .label {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.mode-option .desc {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.letters-readout {
+  font-size: 0.95rem;
+  letter-spacing: 0.15em;
+  color: var(--accent);
+  min-height: 1.2em;
+}
+
+.letters-readout .empty {
+  color: var(--muted);
+  letter-spacing: normal;
+  font-style: italic;
+}
+
+.canvas-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #0d1018;
+  border: 1px solid var(--border);
+  touch-action: none;
+}
+
+.canvas-wrap canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+#drawCanvas {
+  cursor: crosshair;
+}
+
+.hint {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 10px;
+  text-align: center;
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>Generador de sigilos</h1>
+  <p class="subtitle">Escribe una frase o intención, redúcela a su forma simbólica y trázala.</p>
+
+  <div class="panel">
+    <label for="phraseInput">Frase o intención</label>
+    <textarea id="phraseInput" placeholder="Ej: Confío en mi propio criterio"></textarea>
+    <div class="row" style="margin-top:10px;">
+      <button id="generateBtn" class="primary">Generar sigilo</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <label>Letras reducidas</label>
+    <div id="lettersReadout" class="letters-readout"><span class="empty">— genera un sigilo para ver las letras —</span></div>
+  </div>
+
+  <div class="panel">
+    <label>Geometría</label>
+    <div class="mode-select">
+      <label class="mode-option" id="geometryRuedaOption">
+        <input type="radio" name="geometry" value="rueda" checked>
+        <span>
+          <span class="label">Rueda</span>
+          <span class="desc">Las 27 letras distribuidas en círculo.</span>
+        </span>
+      </label>
+      <label class="mode-option" id="geometryKameaOption">
+        <input type="radio" name="geometry" value="kamea">
+        <span>
+          <span class="label">Kamea</span>
+          <span class="desc">Cuadrado mágico de Mercurio, 8×8.</span>
+        </span>
+      </label>
+    </div>
+  </div>
+
+  <div class="panel">
+    <label>Modo de trazo</label>
+    <div class="mode-select">
+      <label class="mode-option" id="modeGuiadoOption">
+        <input type="radio" name="mode" value="guiado" checked>
+        <span>
+          <span class="label">Guiado</span>
+          <span class="desc">Puntos numerados y línea tenue de referencia.</span>
+        </span>
+      </label>
+      <label class="mode-option" id="modeLibreOption">
+        <input type="radio" name="mode" value="libre">
+        <span>
+          <span class="label">Libre</span>
+          <span class="desc">Solo los puntos como referencia, tú trazas.</span>
+        </span>
+      </label>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="canvas-wrap" id="canvasWrap">
+      <canvas id="bgCanvas"></canvas>
+      <canvas id="drawCanvas"></canvas>
+    </div>
+    <p class="hint" id="hintText">Genera un sigilo para empezar a trazar.</p>
+    <div class="row" style="margin-top:10px;">
+      <button id="revealBtn" style="display:none;">Visualizar sigilo</button>
+      <button id="undoBtn" disabled>Deshacer</button>
+      <button id="clearStrokeBtn">Limpiar trazo</button>
+      <button id="resetBtn">Reiniciar todo</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <label for="rotationSlider">Girar sigilo (<span id="rotationValue">0</span>°)</label>
+    <input type="range" id="rotationSlider" min="0" max="359" step="1" value="0" disabled>
+    <div class="row" style="margin-top:10px;">
+      <button id="flipHBtn" disabled>Invertir horizontal</button>
+      <button id="flipVBtn" disabled>Invertir vertical</button>
+      <button id="resetTransformBtn" disabled>Restablecer giro</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------------------------------------------------------------
+// 1. ALFABETO Y ALGORITMO DE REDUCCIÓN
+// ---------------------------------------------------------------
+
+// Las 27 letras del alfabeto español (RAE), en orden, con la Ñ
+// como letra propia entre la N y la O.
+const ALPHABET = ['A','B','C','D','E','F','G','H','I','J','K','L','M','N','Ñ',
+                   'O','P','Q','R','S','T','U','V','W','X','Y','Z'];
+
+const VOWELS = new Set(['A', 'E', 'I', 'O', 'U']);
+
+// Convierte una frase en la secuencia de consonantes únicas que
+// forman el sigilo, en el orden en que aparecen.
+function reduceToSigil(text) {
+  // 1) Mayúsculas.
+  let s = text.toUpperCase();
+
+  // 2) Quitar tildes SIN tocar la Ñ.
+  //    normalize('NFD') separa "É" en "E" + acento combinante, lo cual
+  //    nos permite borrar el acento con una regex. El problema es que
+  //    también separaría "Ñ" en "N" + tilde combinante, y perderíamos
+  //    la diferencia entre N y Ñ. Por eso la protegemos primero con un
+  //    carácter que no va a aparecer nunca en el texto normal.
+  const GUARD = '\u0000';
+  s = s.replace(/Ñ/g, GUARD);
+  s = s.normalize('NFD').replace(/[̀-ͯ]/g, ''); // quita acentos
+  s = s.replace(new RegExp(GUARD, 'g'), 'Ñ');
+
+  // 3) Quedarnos solo con letras válidas (descarta espacios, números,
+  //    signos de puntuación, etc).
+  s = s.replace(/[^A-ZÑ]/g, '');
+
+  // 4) Quitar las vocales.
+  const consonants = [...s].filter(ch => !VOWELS.has(ch));
+
+  // 5) De las consonantes que quedan, conservar solo la primera
+  //    aparición de cada una.
+  const seen = new Set();
+  const result = [];
+  for (const ch of consonants) {
+    if (!seen.has(ch)) {
+      seen.add(ch);
+      result.push(ch);
+    }
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------
+// 2. GEOMETRÍA DE LA RUEDA
+// ---------------------------------------------------------------
+
+// Elementos y estado del canvas. Los canvases son cuadrados y su
+// tamaño en píxeles reales se recalcula en resizeCanvases() para que
+// se vean nítidos también en pantallas de alta densidad (Retina/iPad).
+const canvasWrap = document.getElementById('canvasWrap');
+const bgCanvas = document.getElementById('bgCanvas');
+const drawCanvas = document.getElementById('drawCanvas');
+const bgCtx = bgCanvas.getContext('2d');
+const drawCtx = drawCanvas.getContext('2d');
+
+let wheelCenter = { x: 0, y: 0 };
+let wheelRadius = 0;
+let letterPositions = {}; // { 'A': {x, y}, 'B': {x, y}, ... }
+let currentLetters = [];  // resultado de reduceToSigil(), letras en orden
+
+// Ajusta la resolución interna del canvas a su tamaño real en
+// pantalla * devicePixelRatio, para que las líneas no se vean
+// borrosas en pantallas retina. Sin esto, un canvas de 300x300 CSS
+// pero dibujado a 300x300 px reales se ve pixelado en un iPad.
+function resizeCanvases() {
+  const size = canvasWrap.clientWidth;
+  const dpr = window.devicePixelRatio || 1;
+  [bgCanvas, drawCanvas].forEach(canvas => {
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+  });
+  bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  wheelCenter = { x: size / 2, y: size / 2 };
+  wheelRadius = size * 0.38;
+  letterPositions = computeLetterPositions(wheelCenter, wheelRadius);
+}
+
+// Distribuye las 27 letras en círculo, empezando por A en la parte
+// superior (las 12 en punto) y avanzando en sentido horario.
+//
+// Cada letra guarda dos coordenadas distintas:
+//   - point: el punto exacto SOBRE el círculo. Es el que se usa para
+//     el sigilo (líneas, numeración, trazo de referencia).
+//   - label: un poco más afuera del círculo. Es solo para que el
+//     texto de la letra no tape su propio punto.
+function computeLetterPositions(center, radius) {
+  const positions = {};
+  const n = ALPHABET.length;
+  const labelRadius = radius + 20;
+  ALPHABET.forEach((letter, i) => {
+    const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+    positions[letter] = {
+      point: {
+        x: center.x + radius * Math.cos(angle),
+        y: center.y + radius * Math.sin(angle),
+      },
+      label: {
+        x: center.x + labelRadius * Math.cos(angle),
+        y: center.y + labelRadius * Math.sin(angle),
+      },
+    };
+  });
+  return positions;
+}
+
+// Dibuja el fondo: el círculo guía, las 27 letras del alfabeto, y
+// (si ya hay un sigilo generado) los puntos que le corresponden,
+// con numeración y línea tenue solo cuando el modo es "guiado".
+function drawBackground() {
+  // Geometría kamea: se dibuja aparte y no se toca nada de lo que
+  // sigue, que es exclusivamente el dibujo de la rueda.
+  if (getSelectedGeometry() === 'kamea') {
+    drawKameaBackground();
+    return;
+  }
+
+  const size = canvasWrap.clientWidth;
+  bgCtx.clearRect(0, 0, size, size);
+
+  // Círculo guía.
+  bgCtx.beginPath();
+  bgCtx.arc(wheelCenter.x, wheelCenter.y, wheelRadius, 0, Math.PI * 2);
+  bgCtx.strokeStyle = '#262b3a';
+  bgCtx.lineWidth = 1;
+  bgCtx.stroke();
+
+  // Las 27 letras, como referencia de fondo.
+  bgCtx.font = '13px -apple-system, sans-serif';
+  bgCtx.textAlign = 'center';
+  bgCtx.textBaseline = 'middle';
+  ALPHABET.forEach(letter => {
+    const { point, label } = letterPositions[letter];
+    // Con "Visualizar sigilo" activo, tratamos la rueda como si
+    // ningún punto estuviera marcado: así desaparece el resaltado
+    // dorado y solo queda tu trazo (que vive en el otro canvas).
+    const isActive = !sigilRevealed && currentLetters.includes(letter);
+
+    // Etiqueta con el nombre de la letra, un poco afuera del círculo.
+    bgCtx.fillStyle = isActive ? '#c9a24b' : '#4a5066';
+    bgCtx.fillText(letter, label.x, label.y);
+
+    // Punto exacto sobre el círculo: es la posición real que usa el sigilo.
+    bgCtx.beginPath();
+    bgCtx.arc(point.x, point.y, isActive ? 3.5 : 1.5, 0, Math.PI * 2);
+    bgCtx.fillStyle = isActive ? '#c9a24b' : '#333a4d';
+    bgCtx.fill();
+  });
+
+  if (currentLetters.length === 0) return;
+
+  const mode = getSelectedMode();
+
+  if (mode === 'guiado' && !sigilRevealed) {
+    // Línea tenue conectando los puntos en el orden de la reducción.
+    bgCtx.beginPath();
+    currentLetters.forEach((letter, i) => {
+      const { point } = letterPositions[letter];
+      if (i === 0) bgCtx.moveTo(point.x, point.y);
+      else bgCtx.lineTo(point.x, point.y);
+    });
+    bgCtx.strokeStyle = 'rgba(201, 162, 75, 0.35)';
+    bgCtx.lineWidth = 1.5;
+    bgCtx.stroke();
+
+    // Número de orden junto a cada punto.
+    currentLetters.forEach((letter, i) => {
+      const { point } = letterPositions[letter];
+      bgCtx.fillStyle = '#e7e9f0';
+      bgCtx.font = '11px -apple-system, sans-serif';
+      bgCtx.fillText(String(i + 1), point.x + 10, point.y - 10);
+    });
+  }
+  // En modo "libre" no se dibuja línea ni números: los puntos
+  // (ya marcados arriba como isActive) quedan como única referencia.
+}
+
+// ---------------------------------------------------------------
+// 2.5. GEOMETRÍA KAMEA (cuadrado mágico de Mercurio, 8×8)
+// ---------------------------------------------------------------
+// Segunda geometría, alternativa a la rueda. Esta sección es
+// completamente independiente de la rueda de arriba (no la toca ni
+// reutiliza sus funciones): calcula y dibuja su propia grilla. Lo
+// único que conecta ambas es drawBackground(), que más abajo decide
+// cuál de las dos llamar según la geometría elegida.
+
+// El kamea clásico de Mercurio de la tradición hermética: un
+// cuadrado mágico 8×8 con los números 1 a 64, donde cada fila,
+// columna y diagonal suma 260 (la "constante mágica" de Mercurio).
+const KAMEA_LAYOUT = [
+  [8, 58, 59, 5, 4, 62, 63, 1],
+  [49, 15, 14, 52, 53, 11, 10, 56],
+  [41, 23, 22, 44, 45, 19, 18, 48],
+  [32, 34, 35, 29, 28, 38, 39, 25],
+  [40, 26, 27, 37, 36, 30, 31, 33],
+  [17, 47, 46, 20, 21, 43, 42, 24],
+  [9, 55, 54, 12, 13, 51, 50, 16],
+  [64, 2, 3, 61, 60, 6, 7, 57],
+];
+
+// Índice inverso: dado un número del 1 al 64, en qué fila/columna
+// de la grilla está.
+const KAMEA_CELL_OF_NUMBER = {};
+KAMEA_LAYOUT.forEach((row, r) => {
+  row.forEach((num, c) => {
+    KAMEA_CELL_OF_NUMBER[num] = { row: r, col: c };
+  });
+});
+
+// La misma posición alfabética que ya usa la rueda para repartir las
+// letras en el círculo (A=1, B=2, ... Ñ en su lugar, ... Z=27) es,
+// en el kamea, directamente el número de celda de esa letra.
+const ALPHA_INDEX = {};
+ALPHABET.forEach((letter, i) => { ALPHA_INDEX[letter] = i + 1; });
+
+function getSelectedGeometry() {
+  return document.querySelector('input[name="geometry"]:checked').value;
+}
+
+// Dibuja la grilla de 64 celdas con sus números, resalta las que
+// corresponden a letras del sigilo actual y, en modo guiado (sin
+// "Visualizar sigilo" activo), conecta esas celdas en orden con una
+// línea tenue y numeración — el mismo lenguaje visual que la rueda,
+// pero sobre la grilla del kamea.
+function drawKameaBackground() {
+  const size = canvasWrap.clientWidth;
+  bgCtx.clearRect(0, 0, size, size);
+
+  const gridSize = size * 0.86;
+  const cellSize = gridSize / 8;
+  const origin = (size - gridSize) / 2;
+
+  function cellCenter(num) {
+    const cell = KAMEA_CELL_OF_NUMBER[num];
+    return {
+      x: origin + cell.col * cellSize + cellSize / 2,
+      y: origin + cell.row * cellSize + cellSize / 2,
+    };
+  }
+
+  // Qué números están "activos" (forman parte del sigilo actual).
+  // Con "Visualizar sigilo" puesto, tratamos la grilla como si no
+  // hubiera ninguno activo, igual que hace la rueda.
+  const activeLetterOfNumber = {};
+  if (!sigilRevealed) {
+    currentLetters.forEach(letter => {
+      activeLetterOfNumber[ALPHA_INDEX[letter]] = letter;
+    });
+  }
+
+  // Fondo resaltado de las celdas activas, dibujado antes que las
+  // líneas de la grilla para que el borde quede nítido encima.
+  for (let num = 1; num <= 64; num++) {
+    if (!activeLetterOfNumber[num]) continue;
+    const cell = KAMEA_CELL_OF_NUMBER[num];
+    bgCtx.fillStyle = 'rgba(201, 162, 75, 0.15)';
+    bgCtx.fillRect(origin + cell.col * cellSize, origin + cell.row * cellSize, cellSize, cellSize);
+  }
+
+  // Líneas de la grilla (9 líneas verticales + 9 horizontales para 8x8 celdas).
+  bgCtx.strokeStyle = '#262b3a';
+  bgCtx.lineWidth = 1;
+  for (let i = 0; i <= 8; i++) {
+    const x = origin + i * cellSize;
+    bgCtx.beginPath();
+    bgCtx.moveTo(x, origin);
+    bgCtx.lineTo(x, origin + gridSize);
+    bgCtx.stroke();
+    const y = origin + i * cellSize;
+    bgCtx.beginPath();
+    bgCtx.moveTo(origin, y);
+    bgCtx.lineTo(origin + gridSize, y);
+    bgCtx.stroke();
+  }
+
+  // Los 64 números, uno por celda.
+  bgCtx.textAlign = 'center';
+  bgCtx.textBaseline = 'middle';
+  bgCtx.font = `${Math.max(10, cellSize * 0.28)}px -apple-system, sans-serif`;
+  for (let num = 1; num <= 64; num++) {
+    const isActive = Boolean(activeLetterOfNumber[num]);
+    const p = cellCenter(num);
+    bgCtx.fillStyle = isActive ? '#c9a24b' : '#4a5066';
+    bgCtx.fillText(String(num), p.x, p.y);
+  }
+
+  if (currentLetters.length === 0) return;
+
+  if (getSelectedMode() === 'guiado' && !sigilRevealed) {
+    // Línea tenue conectando las celdas en el orden de la reducción.
+    bgCtx.beginPath();
+    currentLetters.forEach((letter, i) => {
+      const p = cellCenter(ALPHA_INDEX[letter]);
+      if (i === 0) bgCtx.moveTo(p.x, p.y);
+      else bgCtx.lineTo(p.x, p.y);
+    });
+    bgCtx.strokeStyle = 'rgba(201, 162, 75, 0.35)';
+    bgCtx.lineWidth = 1.5;
+    bgCtx.stroke();
+
+    // Número de orden junto a cada celda activa.
+    currentLetters.forEach((letter, i) => {
+      const p = cellCenter(ALPHA_INDEX[letter]);
+      bgCtx.fillStyle = '#e7e9f0';
+      bgCtx.font = '11px -apple-system, sans-serif';
+      bgCtx.fillText(String(i + 1), p.x + cellSize * 0.32, p.y - cellSize * 0.32);
+    });
+  }
+  // En modo "libre" no se dibuja línea ni números: las celdas activas
+  // (ya resaltadas arriba) quedan como única referencia.
+}
+
+// ---------------------------------------------------------------
+// 3. CONTROLES: generar sigilo, elegir modo, limpiar
+// ---------------------------------------------------------------
+
+const phraseInput = document.getElementById('phraseInput');
+const generateBtn = document.getElementById('generateBtn');
+const lettersReadout = document.getElementById('lettersReadout');
+const modeInputs = document.querySelectorAll('input[name="mode"]');
+const modeGuiadoOption = document.getElementById('modeGuiadoOption');
+const modeLibreOption = document.getElementById('modeLibreOption');
+const geometryInputs = document.querySelectorAll('input[name="geometry"]');
+const geometryRuedaOption = document.getElementById('geometryRuedaOption');
+const geometryKameaOption = document.getElementById('geometryKameaOption');
+const revealBtn = document.getElementById('revealBtn');
+const undoBtn = document.getElementById('undoBtn');
+const clearStrokeBtn = document.getElementById('clearStrokeBtn');
+const resetBtn = document.getElementById('resetBtn');
+const hintText = document.getElementById('hintText');
+const rotationSlider = document.getElementById('rotationSlider');
+const rotationValue = document.getElementById('rotationValue');
+const flipHBtn = document.getElementById('flipHBtn');
+const flipVBtn = document.getElementById('flipVBtn');
+const resetTransformBtn = document.getElementById('resetTransformBtn');
+
+// Construyen un juego de trazos/transforms "vacío", con una entrada
+// por modo. Se usan tanto para el estado inicial como para resetear
+// todo al generar un sigilo nuevo.
+function emptyModeStrokes() {
+  return { guiado: [], libre: [] };
+}
+function emptyModeTransforms() {
+  return {
+    guiado: { angle: 0, flipH: false, flipV: false },
+    libre: { angle: 0, flipH: false, flipV: false },
+  };
+}
+
+// Ajuste estético del sigilo YA DIBUJADO: girarlo y/o invertirlo.
+// Cada combinación de GEOMETRÍA + MODO tiene el suyo propio, igual
+// que sus trazos (ver más abajo). Los puntos que guardamos en
+// strokesByGeoMode NUNCA cambian por esto: el ángulo y las
+// inversiones se aplican solo al momento de dibujar en pantalla (ver
+// applyTransform/redrawStrokes), así que mover el control es
+// no-destructivo y se puede deshacer volviendo a 0°.
+let transformByGeoMode = {
+  rueda: emptyModeTransforms(),
+  kamea: emptyModeTransforms(),
+};
+
+function currentTransform() {
+  return transformByGeoMode[getSelectedGeometry()][getSelectedMode()];
+}
+
+// Convierte un punto "tal como se guardó" (sin rotar) en la posición
+// donde debe dibujarse en pantalla, aplicando el giro/inversión
+// actuales alrededor del centro de la rueda.
+function applyTransform(point, t) {
+  let dx = point.x - wheelCenter.x;
+  let dy = point.y - wheelCenter.y;
+  if (t.flipH) dx = -dx;
+  if (t.flipV) dy = -dy;
+  const rad = (t.angle * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return {
+    x: wheelCenter.x + (dx * cos - dy * sin),
+    y: wheelCenter.y + (dx * sin + dy * cos),
+  };
+}
+
+// La operación inversa: dado un punto tal como aparece en pantalla
+// (donde tocaste con el dedo), calcula qué punto "sin rotar" hay que
+// guardar para que, al aplicarle el giro actual, vuelva a caer
+// exactamente donde tocaste. Así, si ya rotaste el sigilo y seguís
+// dibujando, el trazo nuevo aparece bajo tu dedo sin saltos ni
+// duplicar la rotación.
+function inverseTransform(point, t) {
+  let dx = point.x - wheelCenter.x;
+  let dy = point.y - wheelCenter.y;
+  const rad = (-t.angle * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  let rx = dx * cos - dy * sin;
+  let ry = dx * sin + dy * cos;
+  if (t.flipH) rx = -rx;
+  if (t.flipV) ry = -ry;
+  return { x: wheelCenter.x + rx, y: wheelCenter.y + ry };
+}
+
+// true mientras el usuario pidió "ver el sigilo limpio": oculta el
+// resaltado de puntos, la numeración y la línea guía en la rueda de
+// fondo. Solo tiene sentido en modo guiado (en libre nunca se
+// dibujan esos elementos, así que no hay nada que ocultar).
+let sigilRevealed = false;
+
+// Cada combinación de GEOMETRÍA (rueda/kamea) y MODO (guiado/libre)
+// tiene su propio historial de trazos, totalmente independiente de
+// las otras tres. Así podés ir y venir entre cualquiera de las 4
+// combinaciones para comparar cómo queda el sigilo, sin que cambiar
+// de geometría o de modo borre nada: simplemente mostramos el
+// "cajón" de trazos que le corresponde a la combinación activa. Cada
+// trazo es una lista de puntos NORMALIZADOS (fracción 0–1 del ancho
+// del canvas, no píxeles absolutos) — así, si cambia el tamaño del
+// canvas (por ejemplo al redimensionar la ventana), el trazo se
+// reescala solo en vez de quedar desalineado.
+let strokesByGeoMode = {
+  rueda: emptyModeStrokes(),
+  kamea: emptyModeStrokes(),
+};
+
+function currentStrokes() {
+  return strokesByGeoMode[getSelectedGeometry()][getSelectedMode()];
+}
+
+function updateUndoButton() {
+  undoBtn.disabled = currentStrokes().length === 0;
+}
+
+// Los controles de giro/inversión solo tienen sentido si hay algo
+// dibujado en el modo activo. Además de habilitarlos/deshabilitarlos,
+// sincroniza el slider y el estado visual de los botones con el
+// transform guardado para ESTE modo (importante al cambiar de modo:
+// cada uno recuerda su propio giro).
+function updateTransformControls() {
+  const hasStrokes = currentStrokes().length > 0;
+  const t = currentTransform();
+  rotationSlider.disabled = !hasStrokes;
+  flipHBtn.disabled = !hasStrokes;
+  flipVBtn.disabled = !hasStrokes;
+  resetTransformBtn.disabled = !hasStrokes;
+  rotationSlider.value = t.angle;
+  rotationValue.textContent = t.angle;
+  flipHBtn.setAttribute('aria-pressed', String(t.flipH));
+  flipVBtn.setAttribute('aria-pressed', String(t.flipV));
+}
+
+// El botón "Visualizar sigilo" solo aparece en modo guiado y una vez
+// que hay un sigilo generado (en libre no hay nada que "limpiar": la
+// rueda ya se muestra sin números ni línea).
+function updateRevealButton() {
+  const showButton = getSelectedMode() === 'guiado' && currentLetters.length > 0;
+  revealBtn.style.display = showButton ? '' : 'none';
+  revealBtn.textContent = sigilRevealed ? 'Mostrar guía' : 'Visualizar sigilo';
+  revealBtn.setAttribute('aria-pressed', String(sigilRevealed));
+}
+
+function getSelectedMode() {
+  return document.querySelector('input[name="mode"]:checked').value;
+}
+
+function updateModeOptionStyles() {
+  const mode = getSelectedMode();
+  modeGuiadoOption.classList.toggle('active', mode === 'guiado');
+  modeLibreOption.classList.toggle('active', mode === 'libre');
+}
+
+function updateGeometryOptionStyles() {
+  const geometry = getSelectedGeometry();
+  geometryRuedaOption.classList.toggle('active', geometry === 'rueda');
+  geometryKameaOption.classList.toggle('active', geometry === 'kamea');
+}
+
+function renderLettersReadout() {
+  if (currentLetters.length === 0) {
+    lettersReadout.innerHTML = '<span class="empty">— genera un sigilo para ver las letras —</span>';
+  } else {
+    lettersReadout.textContent = currentLetters.join(' · ');
+  }
+}
+
+function generateSigil() {
+  currentLetters = reduceToSigil(phraseInput.value);
+  // Un sigilo nuevo cambia por completo el significado de lo
+  // dibujado: los trazos viejos, en cualquier combinación de
+  // geometría y modo, ya no corresponderían a nada.
+  strokesByGeoMode = { rueda: emptyModeStrokes(), kamea: emptyModeStrokes() };
+  transformByGeoMode = { rueda: emptyModeTransforms(), kamea: emptyModeTransforms() };
+  sigilRevealed = false;
+  clearDrawing();
+  updateUndoButton();
+  updateRevealButton();
+  updateTransformControls();
+  renderLettersReadout();
+  drawBackground();
+  hintText.textContent = currentLetters.length
+    ? 'Traza el sigilo con el dedo o el lápiz sobre el canvas.'
+    : 'La frase no produjo ninguna consonante utilizable. Prueba con otra.';
+}
+
+// Borra solo lo que se ve en el canvas de dibujo. No toca
+// `strokesByGeoMode`: quien llama decide si también hay que olvidar
+// el historial.
+function clearDrawing() {
+  const size = canvasWrap.clientWidth;
+  drawCtx.clearRect(0, 0, size, size);
+}
+
+// Vuelve a pintar, desde cero, los trazos guardados del modo activo.
+// Se usa al deshacer y al cambiar de modo, para que el dibujo en
+// pantalla siempre coincida con el historial de "este" modo.
+function redrawStrokes() {
+  clearDrawing();
+  const t = currentTransform();
+  currentStrokes().forEach(rawPoints => {
+    if (rawPoints.length < 2) return;
+    // rawPoints está en coordenadas normalizadas (0–1): primero lo
+    // escalamos al tamaño actual del canvas, y recién ahí aplicamos
+    // el giro/inversión (que trabaja en píxeles).
+    const points = rawPoints.map(p => applyTransform(toPixelPoint(p), t));
+    drawCtx.beginPath();
+    drawCtx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) {
+      drawCtx.lineTo(points[i].x, points[i].y);
+    }
+    drawCtx.strokeStyle = '#e7e9f0';
+    drawCtx.lineWidth = 3;
+    drawCtx.lineCap = 'round';
+    drawCtx.lineJoin = 'round';
+    drawCtx.stroke();
+  });
+}
+
+generateBtn.addEventListener('click', generateSigil);
+
+modeInputs.forEach(input => {
+  input.addEventListener('change', () => {
+    updateModeOptionStyles();
+    // Al cambiar de modo volvemos a mostrar la guía por defecto en
+    // guiado, y repintamos el trazo guardado de ESE modo con SU
+    // PROPIO giro/inversión (el del otro modo queda intacto,
+    // esperando a que vuelvas).
+    sigilRevealed = false;
+    updateRevealButton();
+    updateUndoButton();
+    updateTransformControls();
+    redrawStrokes();
+    drawBackground();
+  });
+});
+
+// Igual que el modo, cambiar de geometría ya no borra nada: cada
+// combinación geometría+modo tiene su propio cajón de trazos (ver
+// strokesByGeoMode), así que esto solo cambia qué cajón se muestra.
+geometryInputs.forEach(input => {
+  input.addEventListener('change', () => {
+    updateGeometryOptionStyles();
+    sigilRevealed = false;
+    updateRevealButton();
+    updateUndoButton();
+    updateTransformControls();
+    redrawStrokes();
+    drawBackground();
+  });
+});
+
+revealBtn.addEventListener('click', () => {
+  sigilRevealed = !sigilRevealed;
+  updateRevealButton();
+  drawBackground();
+});
+
+undoBtn.addEventListener('click', () => {
+  const strokes = currentStrokes();
+  if (strokes.length === 0) return;
+  strokes.pop();
+  redrawStrokes();
+  updateUndoButton();
+});
+
+clearStrokeBtn.addEventListener('click', () => {
+  strokesByGeoMode[getSelectedGeometry()][getSelectedMode()] = [];
+  transformByGeoMode[getSelectedGeometry()][getSelectedMode()] = { angle: 0, flipH: false, flipV: false };
+  clearDrawing();
+  updateUndoButton();
+  updateTransformControls();
+});
+
+resetBtn.addEventListener('click', () => {
+  phraseInput.value = '';
+  currentLetters = [];
+  strokesByGeoMode = { rueda: emptyModeStrokes(), kamea: emptyModeStrokes() };
+  transformByGeoMode = { rueda: emptyModeTransforms(), kamea: emptyModeTransforms() };
+  sigilRevealed = false;
+  clearDrawing();
+  updateUndoButton();
+  updateRevealButton();
+  updateTransformControls();
+  renderLettersReadout();
+  drawBackground();
+  hintText.textContent = 'Genera un sigilo para empezar a trazar.';
+});
+
+rotationSlider.addEventListener('input', () => {
+  currentTransform().angle = Number(rotationSlider.value);
+  rotationValue.textContent = rotationSlider.value;
+  redrawStrokes();
+});
+
+flipHBtn.addEventListener('click', () => {
+  const t = currentTransform();
+  t.flipH = !t.flipH;
+  updateTransformControls();
+  redrawStrokes();
+});
+
+flipVBtn.addEventListener('click', () => {
+  const t = currentTransform();
+  t.flipV = !t.flipV;
+  updateTransformControls();
+  redrawStrokes();
+});
+
+resetTransformBtn.addEventListener('click', () => {
+  transformByGeoMode[getSelectedGeometry()][getSelectedMode()] = { angle: 0, flipH: false, flipV: false };
+  updateTransformControls();
+  redrawStrokes();
+});
+
+updateModeOptionStyles();
+updateGeometryOptionStyles();
+updateRevealButton();
+updateTransformControls();
+
+// ---------------------------------------------------------------
+// 4. DIBUJO A MANO: Pointer Events (mouse, dedo y lápiz)
+// ---------------------------------------------------------------
+
+let isDrawing = false;
+let lastPoint = null;
+let currentStrokePoints = null; // puntos del trazo que se está dibujando ahora mismo
+
+// Convierte las coordenadas del evento (relativas a la ventana) a
+// coordenadas relativas al canvas.
+function pointerToCanvasPos(e) {
+  const rect = drawCanvas.getBoundingClientRect();
+  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+}
+
+// El canvas es siempre cuadrado (mismo ancho y alto), así que basta
+// una sola división/multiplicación por su tamaño actual para pasar
+// de píxeles a una fracción 0–1 (y viceversa) sin deformar el trazo.
+// Guardar en la forma normalizada es lo que hace que un trazo
+// sobreviva a un cambio de tamaño del canvas: al redibujar, se vuelve
+// a escalar con el tamaño ACTUAL en vez de quedar con coordenadas de
+// un tamaño que ya no existe.
+function toNormalizedPoint(p) {
+  const size = canvasWrap.clientWidth;
+  return { x: p.x / size, y: p.y / size };
+}
+function toPixelPoint(p) {
+  const size = canvasWrap.clientWidth;
+  return { x: p.x * size, y: p.y * size };
+}
+
+drawCanvas.addEventListener('pointerdown', (e) => {
+  if (currentLetters.length === 0) return; // nada que trazar todavía
+
+  isDrawing = true;
+
+  // Captura el puntero: los siguientes eventos "move"/"up" llegan a
+  // este elemento aunque el dedo se salga del canvas, evitando
+  // trazos que se cortan en el borde.
+  drawCanvas.setPointerCapture(e.pointerId);
+
+  // Dibujamos SIEMPRE en la posición real donde está el dedo (lastPoint,
+  // sin transformar): así el trazo aparece exactamente bajo tu dedo,
+  // esté o no rotado/invertido el sigilo en este momento. Pero lo que
+  // GUARDAMOS en currentStrokePoints es la posición "canónica"
+  // (sin el giro actual) Y normalizada (fracción 0–1, no píxeles).
+  // Canónica evita que la rotación se "duplique"; normalizada evita
+  // que un cambio de tamaño del canvas desalinee el trazo.
+  lastPoint = pointerToCanvasPos(e);
+  currentStrokePoints = [toNormalizedPoint(inverseTransform(lastPoint, currentTransform()))];
+  e.preventDefault();
+});
+
+drawCanvas.addEventListener('pointermove', (e) => {
+  if (!isDrawing) return;
+
+  // Fundamental para iPad/Safari: sin esto, el navegador puede
+  // interpretar el arrastre como un gesto de scroll o navegación
+  // aunque touch-action:none ya esté puesto en el CSS.
+  e.preventDefault();
+
+  const point = pointerToCanvasPos(e);
+  drawCtx.beginPath();
+  drawCtx.moveTo(lastPoint.x, lastPoint.y);
+  drawCtx.lineTo(point.x, point.y);
+  drawCtx.strokeStyle = '#e7e9f0';
+  drawCtx.lineWidth = 3;
+  drawCtx.lineCap = 'round';
+  drawCtx.lineJoin = 'round';
+  drawCtx.stroke();
+  lastPoint = point;
+  currentStrokePoints.push(toNormalizedPoint(inverseTransform(point, currentTransform())));
+});
+
+function stopDrawing(e) {
+  if (!isDrawing) return;
+  isDrawing = false;
+  lastPoint = null;
+
+  // Guardamos el trazo completo en el cajón del modo activo para que
+  // "Deshacer" pueda quitarlo más tarde. Un solo punto (un toque sin
+  // arrastrar) no dibuja ninguna línea, así que no vale la pena
+  // guardarlo.
+  if (currentStrokePoints && currentStrokePoints.length > 1) {
+    currentStrokes().push(currentStrokePoints);
+    updateUndoButton();
+    updateTransformControls();
+  }
+  currentStrokePoints = null;
+}
+
+drawCanvas.addEventListener('pointerup', stopDrawing);
+drawCanvas.addEventListener('pointercancel', stopDrawing);
+drawCanvas.addEventListener('pointerleave', stopDrawing);
+
+// ---------------------------------------------------------------
+// 5. ARRANQUE
+// ---------------------------------------------------------------
+
+// Como los trazos se guardan normalizados (ver toNormalizedPoint),
+// un cambio de tamaño ya no necesita borrar nada: solo recalculamos
+// las medidas del canvas y volvemos a dibujar todo (fondo + trazo)
+// escalado al tamaño nuevo.
+window.addEventListener('resize', () => {
+  resizeCanvases();
+  drawBackground();
+  redrawStrokes();
+});
+
+resizeCanvases();
+drawBackground();
+</script>
+</body>
+</html>
