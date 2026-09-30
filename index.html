@@ -14,6 +14,7 @@
   --accent: #c9a24b;
   --accent-dim: rgba(201, 162, 75, 0.35);
   --danger: #d16464;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -1558,14 +1559,36 @@ function addLiveCard(record) {
     overlayId = record.id;
     liveOverlay.hidden = false;
   });
-  deleteBtn.addEventListener('click', () => deleteLiveSigil(record.id));
+  deleteBtn.addEventListener('click', () => {
+    if (confirmByDoubleTap(deleteBtn, '¿Borrar? Toca de nuevo')) deleteLiveSigil(record.id);
+  });
   updateLiveEmpty();
+}
+
+// Confirmación dentro de la página (no con confirm(), que algunos
+// visores, como el de los artifacts de claude.ai, bloquean y responden
+// siempre "no"): el primer toque cambia el texto del botón a una
+// pregunta; solo un segundo toque en los 4 s siguientes confirma.
+function confirmByDoubleTap(button, question) {
+  if (button.dataset.armed === 'true') {
+    clearTimeout(Number(button.dataset.timer));
+    button.dataset.armed = 'false';
+    button.textContent = button.dataset.label;
+    return true;
+  }
+  button.dataset.label = button.textContent;
+  button.dataset.armed = 'true';
+  button.textContent = question;
+  button.dataset.timer = String(setTimeout(() => {
+    button.dataset.armed = 'false';
+    button.textContent = button.dataset.label;
+  }, 4000));
+  return false;
 }
 
 // Borrado manual y definitivo: el ciclo lo cierra el usuario, nunca
 // un temporizador.
 function deleteLiveSigil(id) {
-  if (!confirm('¿Borrar este sigilo? No se puede deshacer.')) return;
   liveSigils = liveSigils.filter(r => r.id !== id);
   saveLiveSigils();
   const card = liveCards.get(id);
@@ -1603,7 +1626,7 @@ function sowSigil() {
       return { x: round(q.x), y: round(q.y) };
     }));
   if (strokes.length === 0) return;
-  if (!confirm('¿Sembrar este sigilo? El trazo se cierra y ya no se podrá editar.')) return;
+  if (!confirmByDoubleTap(sowBtn, '¿Sembrar? Ya no se podrá editar. Toca de nuevo')) return;
 
   let id;
   do { id = randomId(); } while (liveSigils.some(r => r.id === id));
