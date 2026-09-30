@@ -205,6 +205,77 @@ input[type="range"]:disabled {
   margin-top: 10px;
   text-align: center;
 }
+
+.live-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.live-card {
+  background: #0d1018;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.live-card canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  cursor: zoom-in;
+}
+
+.live-card button {
+  width: 100%;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8rem;
+  padding: 8px;
+}
+
+.live-card button:hover {
+  color: var(--danger);
+}
+
+.live-empty {
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-style: italic;
+  margin: 12px 0 0;
+  text-align: center;
+}
+
+.live-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: #05060a;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+}
+
+.live-overlay[hidden] {
+  display: none;
+}
+
+.live-overlay canvas {
+  width: min(92vw, 88vh);
+  aspect-ratio: 1 / 1;
+}
+
+.live-overlay p {
+  font-size: 0.75rem;
+  color: #3a3f52;
+  margin: 12px 0 0;
+}
 </style>
 </head>
 <body>
@@ -214,7 +285,7 @@ input[type="range"]:disabled {
 
   <div class="panel">
     <label for="phraseInput">Frase o intención</label>
-    <textarea id="phraseInput" placeholder="Ej: Confío en mi propio criterio"></textarea>
+    <textarea id="phraseInput" placeholder="Ej: Confío en mi propio criterio" autocomplete="off" spellcheck="false"></textarea>
     <div class="row" style="margin-top:10px;">
       <button id="generateBtn" class="primary">Generar sigilo</button>
     </div>
@@ -288,6 +359,21 @@ input[type="range"]:disabled {
       <button id="resetTransformBtn" disabled>Restablecer giro</button>
     </div>
   </div>
+
+  <div class="panel">
+    <label>Sigilos vivos</label>
+    <div class="row">
+      <button id="sowBtn" class="primary" disabled>Sembrar sigilo</button>
+    </div>
+    <p class="hint" style="text-align:left;">Al sembrarlo, el trazo se cierra y empieza a crecer. La frase se olvida.</p>
+    <div class="live-grid" id="liveGrid"></div>
+    <p class="live-empty" id="liveEmpty">Aún no hay sigilos vivos.</p>
+  </div>
+</div>
+
+<div class="live-overlay" id="liveOverlay" hidden>
+  <canvas id="overlayCanvas"></canvas>
+  <p>Toca para cerrar</p>
 </div>
 
 <script>
@@ -633,6 +719,7 @@ const rotationValue = document.getElementById('rotationValue');
 const flipHBtn = document.getElementById('flipHBtn');
 const flipVBtn = document.getElementById('flipVBtn');
 const resetTransformBtn = document.getElementById('resetTransformBtn');
+const sowBtn = document.getElementById('sowBtn');
 
 // Construyen un juego de trazos/transforms "vacío", con una entrada
 // por modo. Se usan tanto para el estado inicial como para resetear
@@ -724,8 +811,12 @@ function currentStrokes() {
   return strokesByGeoMode[getSelectedGeometry()][getSelectedMode()];
 }
 
+// También habilita "Sembrar sigilo": ambos dependen de lo mismo (que
+// haya algún trazo en el cajón activo) y se actualizan en los mismos
+// momentos.
 function updateUndoButton() {
   undoBtn.disabled = currentStrokes().length === 0;
+  sowBtn.disabled = currentStrokes().length === 0;
 }
 
 // Los controles de giro/inversión solo tienen sentido si hay algo
@@ -781,7 +872,19 @@ function renderLettersReadout() {
 }
 
 function generateSigil() {
+  // Sin frase no hay nada que generar, y no queremos que un toque
+  // accidental en "Generar" (con el campo ya vacío, ver abajo) borre
+  // un trazo a medio hacer.
+  if (!phraseInput.value.trim()) {
+    hintText.textContent = 'Escribe una frase para generar el sigilo.';
+    return;
+  }
   currentLetters = reduceToSigil(phraseInput.value);
+  // La frase se usa UNA sola vez, aquí, y se descarta en el acto: no
+  // queda en el campo, ni en ninguna variable, ni en el almacenamiento.
+  // Solo sobreviven las consonantes reducidas (necesarias para guiar
+  // el trazo), y también esas se olvidan al sembrar el sigilo.
+  phraseInput.value = '';
   // Un sigilo nuevo cambia por completo el significado de lo
   // dibujado: los trazos viejos, en cualquier combinación de
   // geometría y modo, ya no corresponderían a nada.
@@ -887,7 +990,11 @@ clearStrokeBtn.addEventListener('click', () => {
   updateTransformControls();
 });
 
-resetBtn.addEventListener('click', () => {
+// Vuelve el generador a cero: sin frase, sin letras, sin trazos. Lo
+// usa "Reiniciar todo" y también el sembrado de un sigilo, que es el
+// momento en que las letras (lo último que quedaba de la frase) se
+// olvidan.
+function resetAll() {
   phraseInput.value = '';
   currentLetters = [];
   strokesByGeoMode = { rueda: emptyModeStrokes(), kamea: emptyModeStrokes() };
@@ -900,7 +1007,9 @@ resetBtn.addEventListener('click', () => {
   renderLettersReadout();
   drawBackground();
   hintText.textContent = 'Genera un sigilo para empezar a trazar.';
-});
+}
+
+resetBtn.addEventListener('click', resetAll);
 
 rotationSlider.addEventListener('input', () => {
   currentTransform().angle = Number(rotationSlider.value);
@@ -1029,6 +1138,511 @@ drawCanvas.addEventListener('pointercancel', stopDrawing);
 drawCanvas.addEventListener('pointerleave', stopDrawing);
 
 // ---------------------------------------------------------------
+// 4.5. HIPERSIGILO: sigilos vivos que maduran con el tiempo real
+// ---------------------------------------------------------------
+// Un sigilo sembrado deja de ser editable y pasa a esta sección,
+// donde "vive": crece despacio (ligado a la hora real de su
+// nacimiento) y pulsa/titila rápido mientras la página está abierta.
+//
+// Lo único que se guarda de cada sigilo es:
+//   - id:     identificador aleatorio sin significado (ej. "x7k2p9"),
+//             solo para que el código distinga sus registros. Nunca
+//             se muestra.
+//   - bornAt: la hora exacta de nacimiento (ms desde 1970).
+//   - strokes: la forma ya trazada, en coordenadas normalizadas 0–1.
+// Ni la frase ni las letras reducidas se guardan jamás.
+
+const STORAGE_KEY = 'hipersigilos.v1';
+const MATURATION_MS = 8 * 60 * 60 * 1000; // ventana de maduración: 8 h
+const GROWTH_AMOUNT = 0.30;               // a las 8 h: +30% de largo en ramas
+const PULSE_PERIOD = 2.2;                 // segundos por latido
+
+// --- Azar reproducible ---------------------------------------------
+// El árbol de ramas NO se guarda: se recalcula cada vez a partir del
+// id del sigilo, que funciona como semilla. Con la misma semilla, el
+// generador devuelve siempre la misma secuencia de números, así que
+// un sigilo crece siempre hacia la misma forma final, sin importar
+// cuántas veces se abra la app.
+function hashString(str) {
+  let h = 2166136261 >>> 0; // FNV-1a
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function randomId() {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  const bytes = new Uint8Array(6);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => chars[b % chars.length]).join('');
+}
+
+// --- Almacenamiento ------------------------------------------------
+
+let liveSigils = [];
+
+function isValidRecord(r) {
+  return r && typeof r.id === 'string' && typeof r.bornAt === 'number' &&
+    Array.isArray(r.strokes) && r.strokes.length > 0;
+}
+
+function loadLiveSigils() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed.filter(isValidRecord) : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function saveLiveSigils() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(liveSigils));
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+// Cuánto maduró un sigilo, de 0 (recién nacido) a 1 (8 h o más). Se
+// calcula siempre desde la hora de nacimiento: no hace falta que la
+// app haya estado abierta entretanto. Al reabrirla, el sigilo aparece
+// directamente en el punto que le corresponde, y a partir de 1 se
+// queda congelado.
+function maturity(record, now) {
+  return Math.max(0, Math.min(1, (now - record.bornAt) / MATURATION_MS));
+}
+
+// --- Geometría de polilíneas ---------------------------------------
+
+function measurePolyline(points) {
+  const cum = [0];
+  for (let i = 1; i < points.length; i++) {
+    const dx = points[i].x - points[i - 1].x;
+    const dy = points[i].y - points[i - 1].y;
+    cum.push(cum[i - 1] + Math.hypot(dx, dy));
+  }
+  return { points, cum, total: cum[cum.length - 1] };
+}
+
+// Punto situado a una distancia `s` a lo largo de la polilínea.
+function samplePoint(poly, s) {
+  const { points, cum, total } = poly;
+  s = Math.max(0, Math.min(total, s));
+  let i = 1;
+  while (i < points.length - 1 && cum[i] < s) i++;
+  const a = points[i - 1];
+  const b = points[i];
+  const seg = cum[i] - cum[i - 1];
+  const f = seg > 0 ? (s - cum[i - 1]) / seg : 0;
+  return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
+}
+
+// Dirección de la polilínea en `s`. Se mide entre dos puntos algo
+// separados (y no en un solo segmento) porque un trazo a mano alzada
+// está lleno de micro-segmentos temblorosos que darían una dirección
+// casi aleatoria.
+function tangentAt(poly, s) {
+  const d = 0.015;
+  const a = samplePoint(poly, s - d);
+  const b = samplePoint(poly, s + d);
+  return Math.atan2(b.y - a.y, b.x - a.x);
+}
+
+function angleDiff(a, b) {
+  return Math.atan2(Math.sin(a - b), Math.cos(a - b));
+}
+
+// --- Ramificación --------------------------------------------------
+// Convierte la forma de un sigilo en un "modelo de crecimiento": su
+// trazo original intacto más un árbol de ramas que brotan de él.
+//
+// Cómo se decide la forma final (progreso = 1):
+//   1. Se reparten brotes primarios a lo largo del trazo (de 2 a 5,
+//      según su largo), de manera estratificada para que no se
+//      amontonen, saliendo más o menos perpendiculares a la línea.
+//   2. Cada rama primaria echa 2 ramas secundarias, y éstas 0–1
+//      terciaria, cada vez más cortas y abiertas en ángulo.
+//   3. El largo sumado de TODAS las ramas se escala para que sea
+//      exactamente el 30% del largo del trazo original: esa es la
+//      "transformación máxima".
+//   4. Cada rama se dibuja como una curva que se tuerce levemente a
+//      cada paso (un paseo aleatorio del ángulo), lo que le da el
+//      aire orgánico; si se acerca al borde, se curva hacia adentro.
+//
+// Cómo se interpola en el tiempo (progreso 0 → 1):
+//   Cada rama tiene su propia ventana [start, end] dentro de 0–1. Las
+//   primarias brotan escalonadas en el primer 30%; una hija empieza
+//   cuando su madre alcanza el punto donde nace. Las ramas que tienen
+//   hijas terminan de crecer antes (para dar tiempo a las hijas), y
+//   las hojas terminan justo en 1. Así, a las 8 h todo el árbol está
+//   completo a la vez, y en cualquier instante intermedio se dibuja
+//   cada rama hasta el largo que le toca.
+function buildGrowthModel(record) {
+  const rand = mulberry32(hashString(record.id));
+  const strokes = record.strokes.map(measurePolyline).filter(p => p.total > 0);
+  const totalLen = strokes.reduce((sum, p) => sum + p.total, 0);
+  const model = { strokes, branches: [], sparkles: [], pulsePhase: rand() * Math.PI * 2 };
+  if (totalLen === 0) return model;
+
+  // 1–2. Esqueleto abstracto: posiciones, ángulos y largos RELATIVOS.
+  const specs = [];
+  function addBranch(spec) {
+    specs.push(spec);
+    const index = specs.length - 1;
+    if (spec.depth >= 2) return;
+    const count = spec.depth === 0 ? 2 : (rand() < 0.5 ? 1 : 0);
+    const firstSide = rand() < 0.5 ? 1 : -1;
+    for (let c = 0; c < count; c++) {
+      const side = c % 2 === 0 ? firstSide : -firstSide;
+      addBranch({
+        parent: index,
+        depth: spec.depth + 1,
+        attach: 0.3 + rand() * 0.55,
+        turn: side * (0.35 + rand() * 0.45),
+        relLen: spec.relLen * (0.4 + rand() * 0.25),
+        curl: (rand() - 0.5) * 0.06,
+      });
+    }
+  }
+
+  // Pocas ramas y largas: el 30% repartido entre muchas daría matas
+  // diminutas que no se leen como ramificación.
+  const nPrimary = Math.max(2, Math.min(5, Math.round(totalLen / 0.8)));
+  for (let i = 0; i < nPrimary; i++) {
+    let rest = ((i + 0.15 + rand() * 0.7) / nPrimary) * totalLen;
+    let poly = strokes[strokes.length - 1];
+    for (const p of strokes) {
+      if (rest <= p.total) { poly = p; break; }
+      rest -= p.total;
+    }
+    const pos = samplePoint(poly, rest);
+    const side = rand() < 0.5 ? 1 : -1;
+    addBranch({
+      parent: -1,
+      depth: 0,
+      x: pos.x,
+      y: pos.y,
+      angle: tangentAt(poly, rest) + side * (Math.PI / 2 + (rand() - 0.5) * 0.9),
+      relLen: 0.7 + rand() * 0.6,
+      curl: (rand() - 0.5) * 0.08,
+      start: rand() * 0.3,
+    });
+  }
+
+  // 3. Escala: suma de largos de ramas = 30% del largo del trazo.
+  const totalRel = specs.reduce((sum, s) => sum + s.relLen, 0);
+  const k = (totalLen * GROWTH_AMOUNT) / totalRel;
+
+  // 4. Geometría concreta de cada rama, en el mismo orden del
+  //    esqueleto (una madre siempre aparece antes que sus hijas).
+  const STEP = 0.006;
+  specs.forEach((spec, index) => {
+    const length = spec.relLen * k;
+    let x, y, angle, start;
+    if (spec.parent < 0) {
+      ({ x, y, angle, start } = spec);
+    } else {
+      const parent = model.branches[spec.parent];
+      const along = spec.attach * parent.poly.total;
+      ({ x, y } = samplePoint(parent.poly, along));
+      angle = tangentAt(parent.poly, along) + spec.turn;
+      start = parent.start + spec.attach * (parent.end - parent.start);
+    }
+    const isLeaf = !specs.some(s => s.parent === index);
+    const end = start + (1 - start) * (isLeaf ? 1 : 0.7);
+
+    const steps = Math.max(3, Math.ceil(length / STEP));
+    const stepLen = length / steps;
+    const points = [{ x, y }];
+    for (let i = 0; i < steps; i++) {
+      angle += spec.curl + (rand() - 0.5) * 0.12;
+      let nx = x + Math.cos(angle) * stepLen;
+      let ny = y + Math.sin(angle) * stepLen;
+      if (nx < 0.04 || nx > 0.96 || ny < 0.04 || ny > 0.96) {
+        const toCenter = Math.atan2(0.5 - y, 0.5 - x);
+        angle += angleDiff(toCenter, angle) * 0.4;
+        nx = x + Math.cos(angle) * stepLen;
+        ny = y + Math.sin(angle) * stepLen;
+      }
+      x = Math.max(0.01, Math.min(0.99, nx));
+      y = Math.max(0.01, Math.min(0.99, ny));
+      points.push({ x, y });
+    }
+    model.branches.push({ depth: spec.depth, start, end, isLeaf, poly: measurePolyline(points) });
+  });
+
+  // Destellos: algunos fijos sobre el trazo original y uno en la
+  // punta de cada hoja (que solo aparece cuando esa rama ya creció).
+  const nStrokeSparkles = 4 + nPrimary;
+  for (let i = 0; i < nStrokeSparkles; i++) {
+    let rest = rand() * totalLen;
+    let poly = strokes[strokes.length - 1];
+    for (const p of strokes) {
+      if (rest <= p.total) { poly = p; break; }
+      rest -= p.total;
+    }
+    model.sparkles.push({ point: samplePoint(poly, rest), phase: rand() * Math.PI * 2, speed: 1.6 + rand() * 2.4 });
+  }
+  model.branches.forEach((b, i) => {
+    if (b.isLeaf) model.sparkles.push({ branch: i, phase: rand() * Math.PI * 2, speed: 1.6 + rand() * 2.4 });
+  });
+
+  return model;
+}
+
+// Qué fracción de su largo tiene una rama en un progreso dado. La
+// curva suave (smoothstep) hace que cada rama arranque y termine de
+// crecer con delicadeza, en vez de a velocidad constante.
+function branchGrowth(branch, progress) {
+  const span = branch.end - branch.start;
+  const g = span > 0 ? Math.max(0, Math.min(1, (progress - branch.start) / span)) : (progress >= branch.end ? 1 : 0);
+  return g * g * (3 - 2 * g);
+}
+
+// --- Dibujo --------------------------------------------------------
+
+// Traza (sin pintar) una polilínea normalizada hasta el largo
+// `upTo`, en píxeles de un canvas de lado `size`. Devuelve la punta.
+function tracePolyline(ctx, poly, upTo, size) {
+  const { points, cum } = poly;
+  ctx.beginPath();
+  ctx.moveTo(points[0].x * size, points[0].y * size);
+  let tip = points[0];
+  for (let i = 1; i < points.length; i++) {
+    if (cum[i] <= upTo) {
+      tip = points[i];
+    } else {
+      tip = samplePoint(poly, upTo);
+      ctx.lineTo(tip.x * size, tip.y * size);
+      break;
+    }
+    ctx.lineTo(tip.x * size, tip.y * size);
+  }
+  return tip;
+}
+
+// Dos ritmos, bien separados:
+//   - progress (0–1): el crecimiento, ligado a las 8 h reales.
+//   - time (segundos de reloj de animación): el pulso y el titileo,
+//     rápidos, que solo dicen "está vivo" y no dependen de la edad.
+function drawLiveSigil(ctx, size, model, progress, time) {
+  ctx.clearRect(0, 0, size, size);
+  const scale = size / 500;
+  const pulse = 0.5 + 0.5 * Math.sin((time * 2 * Math.PI) / PULSE_PERIOD + model.pulsePhase);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  // Ramas (debajo del trazo original).
+  const branchWidths = [2.2, 1.5, 1];
+  const tips = [];
+  ctx.shadowColor = 'rgba(201, 162, 75, 0.8)';
+  ctx.shadowBlur = (2 + 6 * pulse) * scale;
+  ctx.strokeStyle = `rgba(201, 162, 75, ${0.55 + 0.3 * pulse})`;
+  model.branches.forEach((b, i) => {
+    const grown = branchGrowth(b, progress);
+    tips[i] = null;
+    if (grown <= 0) return;
+    tips[i] = tracePolyline(ctx, b.poly, grown * b.poly.total, size);
+    ctx.lineWidth = Math.max(0.6, branchWidths[b.depth] * scale);
+    ctx.stroke();
+    // Brote luminoso en la punta mientras la rama sigue creciendo.
+    if (grown < 1) {
+      ctx.beginPath();
+      ctx.arc(tips[i].x * size, tips[i].y * size, Math.max(1, 2 * scale), 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(240, 215, 150, 0.9)';
+      ctx.fill();
+    }
+  });
+
+  // Trazo original: el corazón del sigilo, el que más late.
+  ctx.shadowColor = 'rgba(231, 205, 140, 0.9)';
+  ctx.shadowBlur = (4 + 14 * pulse) * scale;
+  ctx.strokeStyle = `rgba(231, 233, 240, ${0.8 + 0.2 * pulse})`;
+  ctx.lineWidth = Math.max(1.2, 3 * scale);
+  model.strokes.forEach(poly => {
+    tracePolyline(ctx, poly, poly.total, size);
+    ctx.stroke();
+  });
+
+  // Centelleo: destellos breves que se encienden y apagan cada uno a
+  // su propio ritmo.
+  ctx.shadowColor = 'rgba(255, 240, 200, 1)';
+  ctx.shadowBlur = 8 * scale;
+  ctx.fillStyle = '#fff6dc';
+  model.sparkles.forEach(sp => {
+    const p = sp.branch === undefined ? sp.point : tips[sp.branch];
+    if (!p) return;
+    if (sp.branch !== undefined && branchGrowth(model.branches[sp.branch], progress) < 0.5) return;
+    const v = Math.pow(Math.max(0, Math.sin(time * sp.speed + sp.phase)), 16);
+    if (v < 0.02) return;
+    ctx.globalAlpha = v;
+    ctx.beginPath();
+    ctx.arc(p.x * size, p.y * size, (1 + 2.5 * v) * Math.max(0.6, scale), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  });
+  ctx.shadowBlur = 0;
+}
+
+// Ajusta la resolución interna de un canvas a su tamaño en pantalla
+// (nítido en Retina). Solo lo redimensiona si cambió, así que se
+// puede llamar en cada cuadro sin costo.
+function fitCanvas(canvas) {
+  const size = canvas.clientWidth;
+  const dpr = window.devicePixelRatio || 1;
+  const px = Math.round(size * dpr);
+  if (canvas.width !== px || canvas.height !== px) {
+    canvas.width = px;
+    canvas.height = px;
+  }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, size };
+}
+
+// --- Interfaz: tarjetas, vista ampliada, sembrar, borrar ------------
+
+const liveGrid = document.getElementById('liveGrid');
+const liveEmpty = document.getElementById('liveEmpty');
+const liveOverlay = document.getElementById('liveOverlay');
+const overlayCanvas = document.getElementById('overlayCanvas');
+
+const liveCards = new Map(); // id -> { record, model, canvas, element, visible }
+let overlayId = null;
+
+// Solo se animan las tarjetas que están en pantalla.
+const cardVisibility = 'IntersectionObserver' in window
+  ? new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        const card = liveCards.get(entry.target.dataset.id);
+        if (card) card.visible = entry.isIntersecting;
+      });
+    })
+  : null;
+
+function updateLiveEmpty() {
+  liveEmpty.style.display = liveSigils.length ? 'none' : '';
+}
+
+function addLiveCard(record) {
+  const element = document.createElement('div');
+  element.className = 'live-card';
+  element.dataset.id = record.id;
+  const canvas = document.createElement('canvas');
+  canvas.setAttribute('role', 'img');
+  canvas.setAttribute('aria-label', 'Sigilo vivo. Toca para ampliarlo.');
+  const deleteBtn = document.createElement('button');
+  deleteBtn.textContent = 'Borrar';
+  element.append(canvas, deleteBtn);
+  liveGrid.prepend(element);
+
+  const card = { record, model: buildGrowthModel(record), canvas, element, visible: true };
+  liveCards.set(record.id, card);
+  if (cardVisibility) cardVisibility.observe(element);
+
+  canvas.addEventListener('click', () => {
+    overlayId = record.id;
+    liveOverlay.hidden = false;
+  });
+  deleteBtn.addEventListener('click', () => deleteLiveSigil(record.id));
+  updateLiveEmpty();
+}
+
+// Borrado manual y definitivo: el ciclo lo cierra el usuario, nunca
+// un temporizador.
+function deleteLiveSigil(id) {
+  if (!confirm('¿Borrar este sigilo? No se puede deshacer.')) return;
+  liveSigils = liveSigils.filter(r => r.id !== id);
+  saveLiveSigils();
+  const card = liveCards.get(id);
+  if (card) {
+    if (cardVisibility) cardVisibility.unobserve(card.element);
+    card.element.remove();
+    liveCards.delete(id);
+  }
+  if (overlayId === id) closeOverlay();
+  updateLiveEmpty();
+}
+
+function closeOverlay() {
+  overlayId = null;
+  liveOverlay.hidden = true;
+}
+
+liveOverlay.addEventListener('click', closeOverlay);
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && overlayId) closeOverlay();
+});
+
+// Nacimiento: cierra el trazado de la combinación geometría+modo
+// activa, hornea en la forma el giro/inversión que tenga en ese
+// momento, y guarda SOLO id + hora + forma. Después borra todo el
+// generador, incluidas las letras reducidas: lo último que quedaba
+// de la frase.
+function sowSigil() {
+  const t = currentTransform();
+  const round = v => Math.round(v * 10000) / 10000;
+  const strokes = currentStrokes()
+    .filter(s => s.length > 1)
+    .map(s => s.map(p => {
+      const q = toNormalizedPoint(applyTransform(toPixelPoint(p), t));
+      return { x: round(q.x), y: round(q.y) };
+    }));
+  if (strokes.length === 0) return;
+  if (!confirm('¿Sembrar este sigilo? El trazo se cierra y ya no se podrá editar.')) return;
+
+  let id;
+  do { id = randomId(); } while (liveSigils.some(r => r.id === id));
+  const record = { id, bornAt: Date.now(), strokes };
+
+  liveSigils.push(record);
+  if (!saveLiveSigils()) {
+    liveSigils.pop();
+    hintText.textContent = 'No se pudo guardar el sigilo en este navegador.';
+    return;
+  }
+  resetAll();
+  addLiveCard(record);
+  hintText.textContent = 'Sigilo sembrado. Ya está creciendo.';
+}
+
+sowBtn.addEventListener('click', sowSigil);
+
+// Un solo bucle de animación para todos los sigilos. El navegador lo
+// pausa solo cuando la pestaña no está visible; al volver, la
+// madurez se recalcula desde la hora de nacimiento, así que el
+// sigilo aparece directamente donde le corresponde.
+function animateLiveSigils() {
+  const now = Date.now();
+  const time = performance.now() / 1000;
+  liveCards.forEach(card => {
+    if (!card.visible || overlayId) return;
+    const { ctx, size } = fitCanvas(card.canvas);
+    drawLiveSigil(ctx, size, card.model, maturity(card.record, now), time);
+  });
+  const overlayCard = overlayId && liveCards.get(overlayId);
+  if (overlayCard) {
+    const { ctx, size } = fitCanvas(overlayCanvas);
+    drawLiveSigil(ctx, size, overlayCard.model, maturity(overlayCard.record, now), time);
+  }
+  requestAnimationFrame(animateLiveSigils);
+}
+
+// ---------------------------------------------------------------
 // 5. ARRANQUE
 // ---------------------------------------------------------------
 
@@ -1044,6 +1658,13 @@ window.addEventListener('resize', () => {
 
 resizeCanvases();
 drawBackground();
+
+// Los más antiguos primero: addLiveCard() pone cada uno arriba, así
+// que el más reciente queda al principio de la grilla.
+liveSigils = loadLiveSigils();
+liveSigils.forEach(addLiveCard);
+updateLiveEmpty();
+requestAnimationFrame(animateLiveSigils);
 </script>
 </body>
 </html>
