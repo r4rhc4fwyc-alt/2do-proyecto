@@ -366,7 +366,7 @@ input[type="range"]:disabled {
     <div class="row">
       <button id="sowBtn" class="primary" disabled>Sembrar sigilo</button>
     </div>
-    <p class="hint" style="text-align:left;">Al sembrarlo, el trazo se cierra y empieza a crecer. La frase se olvida.</p>
+    <p class="hint" style="text-align:left;">Al sembrarlo, el trazo se cierra y empieza a madurar. La frase se olvida.</p>
     <div class="live-grid" id="liveGrid"></div>
     <p class="live-empty" id="liveEmpty">Aún no hay sigilos vivos.</p>
   </div>
@@ -1142,7 +1142,7 @@ drawCanvas.addEventListener('pointerleave', stopDrawing);
 // 4.5. HIPERSIGILO: sigilos vivos que maduran con el tiempo real
 // ---------------------------------------------------------------
 // Un sigilo sembrado deja de ser editable y pasa a esta sección,
-// donde "vive": crece despacio (ligado a la hora real de su
+// donde "vive": se afina despacio (ligado a la hora real de su
 // nacimiento) y pulsa/titila rápido mientras la página está abierta.
 //
 // Lo único que se guarda de cada sigilo es:
@@ -1155,15 +1155,15 @@ drawCanvas.addEventListener('pointerleave', stopDrawing);
 
 const STORAGE_KEY = 'hipersigilos.v1';
 const MATURATION_MS = 8 * 60 * 60 * 1000; // ventana de maduración: 8 h
-const GROWTH_AMOUNT = 0.30;               // a las 8 h: +30% de largo en ramas
 const PULSE_PERIOD = 2.2;                 // segundos por latido
 
 // --- Azar reproducible ---------------------------------------------
-// El árbol de ramas NO se guarda: se recalcula cada vez a partir del
-// id del sigilo, que funciona como semilla. Con la misma semilla, el
-// generador devuelve siempre la misma secuencia de números, así que
-// un sigilo crece siempre hacia la misma forma final, sin importar
-// cuántas veces se abra la app.
+// La forma afinada NO se guarda: se recalcula cada vez a partir del
+// trazo y del id del sigilo, que funciona como semilla (para los
+// desfases y destellos). Con la misma semilla, el generador devuelve
+// siempre la misma secuencia de números, así que un sigilo madura
+// siempre hacia la misma forma final, sin importar cuántas veces se
+// abra la app.
 function hashString(str) {
   let h = 2166136261 >>> 0; // FNV-1a
   for (let i = 0; i < str.length; i++) {
@@ -1229,255 +1229,395 @@ function maturity(record, now) {
 
 // --- Geometría de polilíneas ---------------------------------------
 
-function measurePolyline(points) {
-  const cum = [0];
-  for (let i = 1; i < points.length; i++) {
-    const dx = points[i].x - points[i - 1].x;
-    const dy = points[i].y - points[i - 1].y;
-    cum.push(cum[i - 1] + Math.hypot(dx, dy));
-  }
-  return { points, cum, total: cum[cum.length - 1] };
-}
-
-// Punto situado a una distancia `s` a lo largo de la polilínea.
-function samplePoint(poly, s) {
-  const { points, cum, total } = poly;
-  s = Math.max(0, Math.min(total, s));
-  let i = 1;
-  while (i < points.length - 1 && cum[i] < s) i++;
-  const a = points[i - 1];
-  const b = points[i];
-  const seg = cum[i] - cum[i - 1];
-  const f = seg > 0 ? (s - cum[i - 1]) / seg : 0;
-  return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
-}
-
-// Dirección de la polilínea en `s`. Se mide entre dos puntos algo
-// separados (y no en un solo segmento) porque un trazo a mano alzada
-// está lleno de micro-segmentos temblorosos que darían una dirección
-// casi aleatoria.
-function tangentAt(poly, s) {
-  const d = 0.015;
-  const a = samplePoint(poly, s - d);
-  const b = samplePoint(poly, s + d);
-  return Math.atan2(b.y - a.y, b.x - a.x);
-}
-
 function angleDiff(a, b) {
   return Math.atan2(Math.sin(a - b), Math.cos(a - b));
 }
 
-// --- Ramificación --------------------------------------------------
-// Convierte la forma de un sigilo en un "modelo de crecimiento": su
-// trazo original intacto más un árbol de ramas que brotan de él.
-//
-// Cómo se decide la forma final (progreso = 1):
-//   1. Se reparten brotes primarios a lo largo del trazo (de 2 a 5,
-//      según su largo), de manera estratificada para que no se
-//      amontonen, saliendo más o menos perpendiculares a la línea.
-//   2. Cada rama primaria echa 2 ramas secundarias, y éstas 0–1
-//      terciaria, cada vez más cortas y abiertas en ángulo.
-//   3. El largo sumado de TODAS las ramas se escala para que sea
-//      exactamente el 30% del largo del trazo original: esa es la
-//      "transformación máxima".
-//   4. Cada rama se dibuja como una curva que se tuerce levemente a
-//      cada paso (un paseo aleatorio del ángulo), lo que le da el
-//      aire orgánico; si se acerca al borde, se curva hacia adentro.
-//
-// Cómo se interpola en el tiempo (progreso 0 → 1):
-//   Cada rama tiene su propia ventana [start, end] dentro de 0–1. Las
-//   primarias brotan escalonadas en el primer 30%; una hija empieza
-//   cuando su madre alcanza el punto donde nace. Las ramas que tienen
-//   hijas terminan de crecer antes (para dar tiempo a las hijas), y
-//   las hojas terminan justo en 1. Así, a las 8 h todo el árbol está
-//   completo a la vez, y en cualquier instante intermedio se dibuja
-//   cada rama hasta el largo que le toca.
-function buildGrowthModel(record) {
-  const rand = mulberry32(hashString(record.id));
-  const strokes = record.strokes.map(measurePolyline).filter(p => p.total > 0);
-  const totalLen = strokes.reduce((sum, p) => sum + p.total, 0);
-  const model = { strokes, branches: [], sparkles: [], pulsePhase: rand() * Math.PI * 2 };
-  if (totalLen === 0) return model;
-
-  // 1–2. Esqueleto abstracto: posiciones, ángulos y largos RELATIVOS.
-  const specs = [];
-  function addBranch(spec) {
-    specs.push(spec);
-    const index = specs.length - 1;
-    if (spec.depth >= 2) return;
-    const count = spec.depth === 0 ? 2 : (rand() < 0.5 ? 1 : 0);
-    const firstSide = rand() < 0.5 ? 1 : -1;
-    for (let c = 0; c < count; c++) {
-      const side = c % 2 === 0 ? firstSide : -firstSide;
-      addBranch({
-        parent: index,
-        depth: spec.depth + 1,
-        attach: 0.3 + rand() * 0.55,
-        turn: side * (0.35 + rand() * 0.45),
-        relLen: spec.relLen * (0.4 + rand() * 0.25),
-        curl: (rand() - 0.5) * 0.06,
-      });
+// Reparte puntos a distancias iguales (`step`) a lo largo del trazo.
+// Un trazo a mano tiene muchos puntos donde el dedo iba lento y pocos
+// donde iba rápido; con muestras parejas, todo lo que viene después
+// (suavizar, medir giros) se comporta igual en todo el trazo.
+function resample(points, step) {
+  const pts = [points[0]];
+  for (let i = 1; i < points.length; i++) {
+    const q = pts[pts.length - 1];
+    if (Math.hypot(points[i].x - q.x, points[i].y - q.y) > 1e-6) pts.push(points[i]);
+  }
+  if (pts.length < 2) return null;
+  const out = [{ x: pts[0].x, y: pts[0].y }];
+  let carry = step; // lo que falta para la próxima muestra
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+    let pos = 0;
+    while (segLen - pos >= carry) {
+      pos += carry;
+      const f = pos / segLen;
+      out.push({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f });
+      carry = step;
     }
+    carry -= segLen - pos;
+  }
+  const last = pts[pts.length - 1];
+  const tail = out[out.length - 1];
+  if (Math.hypot(last.x - tail.x, last.y - tail.y) > step * 0.3) out.push({ x: last.x, y: last.y });
+  else out[out.length - 1] = { x: last.x, y: last.y };
+  return out.length >= 2 ? out : null;
+}
+
+// Promedio gaussiano de ancho `sigma` (en muestras). Los extremos se
+// reflejan respecto a sí mismos, así que no se encogen ni se mueven:
+// el suavizado alisa la curva pero deja los extremos donde están.
+function gaussSmooth(pts, sigma) {
+  const n = pts.length;
+  const R = Math.ceil(sigma * 3);
+  const w = [];
+  let sum = 0;
+  for (let k = -R; k <= R; k++) {
+    const v = Math.exp(-(k * k) / (2 * sigma * sigma));
+    w.push(v);
+    sum += v;
+  }
+  const at = i => {
+    if (i < 0) {
+      const j = Math.min(-i, n - 1);
+      return { x: 2 * pts[0].x - pts[j].x, y: 2 * pts[0].y - pts[j].y };
+    }
+    if (i > n - 1) {
+      const j = Math.max(2 * (n - 1) - i, 0);
+      return { x: 2 * pts[n - 1].x - pts[j].x, y: 2 * pts[n - 1].y - pts[j].y };
+    }
+    return pts[i];
+  };
+  return pts.map((_, i) => {
+    let x = 0;
+    let y = 0;
+    for (let k = -R; k <= R; k++) {
+      const p = at(i + k);
+      x += p.x * w[k + R];
+      y += p.y * w[k + R];
+    }
+    return { x: x / sum, y: y / sum };
+  });
+}
+
+// --- Afinado del trazo ----------------------------------------------
+// El sigilo no echa ramas: se afina a sí mismo. Con el tiempo, cada
+// parte de su trazo va hacia una versión "bien hecha" de sí misma:
+//   - los tramos que quisieron ser rectos se enderezan;
+//   - los tramos que son curvas se alisan en un arco limpio;
+//   - las esquinas redondeadas o torcidas se vuelven vértices nítidos,
+//     en el punto donde se cruzarían las dos rectas que llegan a ellas;
+//   - los vértices que quedaron casi juntos (el final de un trazo y el
+//     principio del siguiente, por ejemplo) se funden en uno solo.
+//
+// Cómo se distingue una esquina de una curva: se mide cuánto gira el
+// trazo en una ventana corta y en una larga alrededor de cada punto.
+// En una esquina casi todo el giro ocurre en la ventana corta; en una
+// curva, la ventana larga gira bastante más que la corta.
+
+const STEP = 0.004;         // separación entre muestras (fracción del lado del canvas)
+const CORNER_SMALL = 12;    // ventana corta para detectar esquinas, en muestras (±0,05)
+const CORNER_LARGE = 28;    // ventana larga, para distinguir esquina de curva (±0,11)
+const CORNER_MIN_TURN = 0.75;  // giro mínimo en la ventana corta (≈43°)
+const CORNER_MAX_RATIO = 1.45; // largo/corto por encima de esto es curva, no esquina
+const MIN_RUN = 12;         // tramo mínimo entre dos vértices (≈0,05 del canvas)
+const CLUSTER_R = 0.035;    // vértices más cerca que esto se funden en uno
+const CURVE_SIGMA = 9;      // cuánto se alisa una curva, en muestras
+const REFINE_START = 0.25;  // cuánto se escalona el inicio del afinado entre el principio y el final del trazo
+const REFINE_SPAN = 0.65;   // fracción de las 8 h que tarda cada punto en afinarse
+
+// Rumbo del trazo en cada muestra, "desenrollado": si el trazo da
+// una vuelta completa, el rumbo sigue creciendo en vez de volver a
+// empezar. Así el giro entre dos puntos es el giro real, también en
+// espirales y lazos.
+function unwrappedHeading(S) {
+  const n = S.length;
+  const h = [];
+  for (let j = 0; j < n; j++) {
+    const a = S[Math.max(0, j - 3)];
+    const b = S[Math.min(n - 1, j + 3)];
+    h.push(Math.atan2(b.y - a.y, b.x - a.x));
+  }
+  const theta = [h[0]];
+  for (let j = 1; j < n; j++) theta.push(theta[j - 1] + angleDiff(h[j], h[j - 1]));
+  return theta;
+}
+
+function detectCorners(S) {
+  const n = S.length;
+  const theta = unwrappedHeading(S);
+  const score = new Array(n).fill(0);
+  // Solo se buscan esquinas con la ventana larga completa a ambos
+  // lados: cerca de un extremo no se puede saber si un giro es una
+  // esquina o el comienzo de una curva cerrada (como el centro de una
+  // espiral). Lo que quede a menos de ~0,11 de un extremo se trata
+  // como parte del tramo vecino.
+  for (let i = CORNER_LARGE; i < n - CORNER_LARGE; i++) {
+    const small = Math.abs(theta[i + CORNER_SMALL] - theta[i - CORNER_SMALL]);
+    if (small < CORNER_MIN_TURN) continue;
+    if (Math.abs(theta[i + CORNER_LARGE] - theta[i - CORNER_LARGE]) > small * CORNER_MAX_RATIO) continue;
+    score[i] = small;
+  }
+  // De cada racimo de candidatos vecinos, se queda el que más gira.
+  const corners = [];
+  for (let i = 0; i < n; i++) {
+    if (score[i] === 0) continue;
+    let best = true;
+    for (let j = Math.max(0, i - CORNER_SMALL); j <= Math.min(n - 1, i + CORNER_SMALL); j++) {
+      if (score[j] > score[i] || (score[j] === score[i] && j < i)) { best = false; break; }
+    }
+    if (best) corners.push(i);
+  }
+  return corners;
+}
+
+// ¿El tramo entre las muestras a y b quiso ser una recta? Sí si
+// ningún punto se aleja de la cuerda más de un 6% de su largo.
+function isStraight(S, a, b) {
+  const A = S[a];
+  const B = S[b];
+  const len = Math.hypot(B.x - A.x, B.y - A.y);
+  if (len < 0.03) return false;
+  let maxDev = 0;
+  for (let i = a; i <= b; i++) {
+    const dev = Math.abs((S[i].x - A.x) * (B.y - A.y) - (S[i].y - A.y) * (B.x - A.x)) / len;
+    if (dev > maxDev) maxDev = dev;
+  }
+  return maxDev <= Math.max(0.008, 0.06 * len);
+}
+
+// Recta que mejor se ajusta a un tramo (sin mirar su 15% de cada
+// extremo, donde las esquinas redondeadas la desviarían).
+function fitLine(S, a, b) {
+  let lo = a + Math.round((b - a) * 0.15);
+  let hi = b - Math.round((b - a) * 0.15);
+  if (hi - lo < 4) { lo = a; hi = b; }
+  const m = hi - lo + 1;
+  let cx = 0;
+  let cy = 0;
+  for (let i = lo; i <= hi; i++) { cx += S[i].x; cy += S[i].y; }
+  cx /= m;
+  cy /= m;
+  let sxx = 0;
+  let syy = 0;
+  let sxy = 0;
+  for (let i = lo; i <= hi; i++) {
+    const dx = S[i].x - cx;
+    const dy = S[i].y - cy;
+    sxx += dx * dx;
+    syy += dy * dy;
+    sxy += dx * dy;
+  }
+  const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  let dx = Math.cos(ang);
+  let dy = Math.sin(ang);
+  if ((S[b].x - S[a].x) * dx + (S[b].y - S[a].y) * dy < 0) { dx = -dx; dy = -dy; }
+  return { x: cx, y: cy, dx, dy };
+}
+
+function projectOnLine(p, L) {
+  const t = (p.x - L.x) * L.dx + (p.y - L.y) * L.dy;
+  return { x: L.x + L.dx * t, y: L.y + L.dy * t };
+}
+
+function intersectLines(L1, L2) {
+  const cross = L1.dx * L2.dy - L1.dy * L2.dx;
+  if (Math.abs(cross) < 0.25) return null; // casi paralelas: no hay esquina que arreglar
+  const t = ((L2.x - L1.x) * L2.dy - (L2.y - L1.y) * L2.dx) / cross;
+  return { x: L1.x + L1.dx * t, y: L1.y + L1.dy * t };
+}
+
+// Parte la forma de UN trazo: dónde están sus vértices, qué tramos
+// son rectas y cuáles curvas, y dónde debería quedar cada vértice
+// una vez arreglado.
+function analyseStroke(P) {
+  const n = P.length;
+  const S = gaussSmooth(P, 3); // copia sin temblor, solo para medir
+  const nodes = [0];
+  detectCorners(S).forEach(c => {
+    if (c - nodes[nodes.length - 1] >= MIN_RUN && n - 1 - c >= MIN_RUN) nodes.push(c);
+  });
+  nodes.push(n - 1);
+
+  const runs = [];
+  for (let j = 0; j < nodes.length - 1; j++) {
+    const a = nodes[j];
+    const b = nodes[j + 1];
+    const straight = isStraight(S, a, b);
+    runs.push({ a, b, straight, line: straight ? fitLine(S, a, b) : null });
   }
 
-  // Pocas ramas y largas: el 30% repartido entre muchas daría matas
-  // diminutas que no se leen como ramificación.
-  const nPrimary = Math.max(2, Math.min(5, Math.round(totalLen / 0.8)));
-  for (let i = 0; i < nPrimary; i++) {
-    let rest = ((i + 0.15 + rand() * 0.7) / nPrimary) * totalLen;
-    let poly = strokes[strokes.length - 1];
-    for (const p of strokes) {
-      if (rest <= p.total) { poly = p; break; }
-      rest -= p.total;
+  const nodePos = nodes.map((idx, j) => {
+    const p = S[idx];
+    const lines = [runs[j - 1], runs[j]].filter(r => r && r.straight).map(r => r.line);
+    if (lines.length === 2) {
+      const q = intersectLines(lines[0], lines[1]);
+      return q && Math.hypot(q.x - p.x, q.y - p.y) < 0.06 ? q : p;
     }
-    const pos = samplePoint(poly, rest);
-    const side = rand() < 0.5 ? 1 : -1;
-    addBranch({
-      parent: -1,
-      depth: 0,
-      x: pos.x,
-      y: pos.y,
-      angle: tangentAt(poly, rest) + side * (Math.PI / 2 + (rand() - 0.5) * 0.9),
-      relLen: 0.7 + rand() * 0.6,
-      curl: (rand() - 0.5) * 0.08,
-      start: rand() * 0.3,
+    if (lines.length === 1) return projectOnLine(p, lines[0]);
+    return p;
+  });
+  return { P, nodes, runs, nodePos };
+}
+
+// Une los vértices que quedaron casi en el mismo sitio, entre todos
+// los trazos del sigilo, en uno solo (el promedio de ellos).
+function clusterNodes(strokes) {
+  const clusters = [];
+  const refs = [];
+  strokes.forEach(st => {
+    st.nodeT = [];
+    st.nodePos.forEach((pos, j) => {
+      let c = clusters.find(k => Math.hypot(k.sx / k.n - pos.x, k.sy / k.n - pos.y) < CLUSTER_R);
+      if (!c) { c = { sx: 0, sy: 0, n: 0 }; clusters.push(c); }
+      c.sx += pos.x;
+      c.sy += pos.y;
+      c.n++;
+      refs.push({ st, j, c });
     });
-  }
+  });
+  refs.forEach(({ st, j, c }) => { st.nodeT[j] = { x: c.sx / c.n, y: c.sy / c.n }; });
+}
 
-  // 3. Escala: suma de largos de ramas = 30% del largo del trazo.
-  const totalRel = specs.reduce((sum, s) => sum + s.relLen, 0);
-  const k = (totalLen * GROWTH_AMOUNT) / totalRel;
-
-  // 4. Geometría concreta de cada rama, en el mismo orden del
-  //    esqueleto (una madre siempre aparece antes que sus hijas).
-  const STEP = 0.006;
-  specs.forEach((spec, index) => {
-    const length = spec.relLen * k;
-    let x, y, angle, start;
-    if (spec.parent < 0) {
-      ({ x, y, angle, start } = spec);
-    } else {
-      const parent = model.branches[spec.parent];
-      const along = spec.attach * parent.poly.total;
-      ({ x, y } = samplePoint(parent.poly, along));
-      angle = tangentAt(parent.poly, along) + spec.turn;
-      start = parent.start + spec.attach * (parent.end - parent.start);
+// Dónde debería terminar cada punto del trazo. Las rectas se
+// reparten parejas entre sus dos vértices ya arreglados; las curvas
+// se alisan y luego se desplazan para que enganchen con ellos.
+function buildTargets(st) {
+  const { P, runs, nodeT } = st;
+  const T = new Array(P.length);
+  runs.forEach((run, j) => {
+    const A = nodeT[j];
+    const B = nodeT[j + 1];
+    const cum = [0];
+    for (let i = run.a + 1; i <= run.b; i++) {
+      cum.push(cum[cum.length - 1] + Math.hypot(P[i].x - P[i - 1].x, P[i].y - P[i - 1].y));
     }
-    const isLeaf = !specs.some(s => s.parent === index);
-    const end = start + (1 - start) * (isLeaf ? 1 : 0.7);
-
-    const steps = Math.max(3, Math.ceil(length / STEP));
-    const stepLen = length / steps;
-    const points = [{ x, y }];
-    for (let i = 0; i < steps; i++) {
-      angle += spec.curl + (rand() - 0.5) * 0.12;
-      let nx = x + Math.cos(angle) * stepLen;
-      let ny = y + Math.sin(angle) * stepLen;
-      if (nx < 0.04 || nx > 0.96 || ny < 0.04 || ny > 0.96) {
-        const toCenter = Math.atan2(0.5 - y, 0.5 - x);
-        angle += angleDiff(toCenter, angle) * 0.4;
-        nx = x + Math.cos(angle) * stepLen;
-        ny = y + Math.sin(angle) * stepLen;
+    const total = cum[cum.length - 1] || 1;
+    const curve = run.straight ? null : gaussSmooth(P.slice(run.a, run.b + 1), CURVE_SIGMA);
+    const dax = A.x - P[run.a].x;
+    const day = A.y - P[run.a].y;
+    const dbx = B.x - P[run.b].x;
+    const dby = B.y - P[run.b].y;
+    for (let i = run.a; i <= run.b; i++) {
+      const f = cum[i - run.a] / total;
+      if (run.straight) {
+        T[i] = { x: A.x + (B.x - A.x) * f, y: A.y + (B.y - A.y) * f };
+      } else {
+        const c = curve[i - run.a];
+        T[i] = { x: c.x + dax * (1 - f) + dbx * f, y: c.y + day * (1 - f) + dby * f };
       }
-      x = Math.max(0.01, Math.min(0.99, nx));
-      y = Math.max(0.01, Math.min(0.99, ny));
-      points.push({ x, y });
     }
-    model.branches.push({ depth: spec.depth, start, end, isLeaf, poly: measurePolyline(points) });
+  });
+  return T;
+}
+
+// Modelo de un sigilo: el trazo original (P), su versión afinada (T)
+// y, para cada punto, el momento en que empieza a moverse hacia ella.
+//
+// Interpolación en el tiempo: cada punto tarda REFINE_SPAN (65%) de
+// las 8 h en llegar a su destino, con arranque suave. El arranque se
+// escalona un poco a lo largo del trazo (el principio se afina antes
+// que el final) y con un desfase propio por tramo, así que ningún
+// instante intermedio se ve como un simple "fundido" de toda la forma:
+// unas partes van más adelantadas que otras, como si el sigilo
+// madurara por zonas. A las 8 h, todos los puntos han llegado.
+function buildSigilModel(record) {
+  const rand = mulberry32(hashString(record.id));
+  const model = { strokes: [], sparkles: [], pulsePhase: rand() * Math.PI * 2 };
+
+  record.strokes.forEach(raw => {
+    const P = resample(raw, STEP);
+    if (P && P.length >= 4) model.strokes.push(analyseStroke(P));
+  });
+  clusterNodes(model.strokes);
+
+  const lengths = model.strokes.map(st => (st.P.length - 1) * STEP);
+  const totalLen = lengths.reduce((a, b) => a + b, 0) || 1;
+  let before = 0;
+  model.strokes.forEach((st, s) => {
+    st.T = buildTargets(st);
+    st.D = st.P.map(p => ({ x: p.x, y: p.y })); // forma que se dibuja ahora
+    st.start = new Array(st.P.length);
+    st.runs.forEach(run => {
+      const delay = rand() * 0.10;
+      for (let i = run.a; i <= run.b; i++) {
+        const u = (before + i * STEP) / totalLen;
+        st.start[i] = REFINE_START * u + delay;
+      }
+    });
+    before += lengths[s];
   });
 
-  // Destellos: algunos fijos sobre el trazo original y uno en la
-  // punta de cada hoja (que solo aparece cuando esa rama ya creció).
-  const nStrokeSparkles = 4 + nPrimary;
-  for (let i = 0; i < nStrokeSparkles; i++) {
-    let rest = rand() * totalLen;
-    let poly = strokes[strokes.length - 1];
-    for (const p of strokes) {
-      if (rest <= p.total) { poly = p; break; }
-      rest -= p.total;
+  // Destellos: uno en cada vértice y unos pocos sueltos sobre el trazo.
+  model.strokes.forEach((st, s) => {
+    st.nodes.forEach(idx => {
+      model.sparkles.push({ stroke: s, idx, phase: rand() * Math.PI * 2, speed: 1.6 + rand() * 2.4 });
+    });
+  });
+  if (model.strokes.length) {
+    for (let i = 0; i < 4; i++) {
+      const s = Math.floor(rand() * model.strokes.length);
+      const idx = Math.floor(rand() * model.strokes[s].P.length);
+      model.sparkles.push({ stroke: s, idx, phase: rand() * Math.PI * 2, speed: 1.6 + rand() * 2.4 });
     }
-    model.sparkles.push({ point: samplePoint(poly, rest), phase: rand() * Math.PI * 2, speed: 1.6 + rand() * 2.4 });
   }
-  model.branches.forEach((b, i) => {
-    if (b.isLeaf) model.sparkles.push({ branch: i, phase: rand() * Math.PI * 2, speed: 1.6 + rand() * 2.4 });
-  });
-
   return model;
 }
 
-// Qué fracción de su largo tiene una rama en un progreso dado. La
-// curva suave (smoothstep) hace que cada rama arranque y termine de
-// crecer con delicadeza, en vez de a velocidad constante.
-function branchGrowth(branch, progress) {
-  const span = branch.end - branch.start;
-  const g = span > 0 ? Math.max(0, Math.min(1, (progress - branch.start) / span)) : (progress >= branch.end ? 1 : 0);
-  return g * g * (3 - 2 * g);
+// Calcula la forma que corresponde al progreso dado (0–1). Solo
+// recalcula si el progreso cambió de verdad (más de ~3 s en la
+// ventana de 8 h), así que llamarlo en cada cuadro no cuesta nada.
+function shapeAt(model, progress) {
+  if (model.shapeProgress !== undefined && Math.abs(model.shapeProgress - progress) < 1e-4) return;
+  model.strokes.forEach(st => {
+    for (let i = 0; i < st.P.length; i++) {
+      const t = Math.max(0, Math.min(1, (progress - st.start[i]) / REFINE_SPAN));
+      const e = t * t * (3 - 2 * t);
+      st.D[i].x = st.P[i].x + (st.T[i].x - st.P[i].x) * e;
+      st.D[i].y = st.P[i].y + (st.T[i].y - st.P[i].y) * e;
+    }
+  });
+  model.shapeProgress = progress;
 }
 
 // --- Dibujo --------------------------------------------------------
 
-// Traza (sin pintar) una polilínea normalizada hasta el largo
-// `upTo`, en píxeles de un canvas de lado `size`. Devuelve la punta.
-function tracePolyline(ctx, poly, upTo, size) {
-  const { points, cum } = poly;
-  ctx.beginPath();
-  ctx.moveTo(points[0].x * size, points[0].y * size);
-  let tip = points[0];
-  for (let i = 1; i < points.length; i++) {
-    if (cum[i] <= upTo) {
-      tip = points[i];
-    } else {
-      tip = samplePoint(poly, upTo);
-      ctx.lineTo(tip.x * size, tip.y * size);
-      break;
-    }
-    ctx.lineTo(tip.x * size, tip.y * size);
-  }
-  return tip;
-}
-
 // Dos ritmos, bien separados:
-//   - progress (0–1): el crecimiento, ligado a las 8 h reales.
+//   - progress (0–1): el afinado del trazo, ligado a las 8 h reales.
 //   - time (segundos de reloj de animación): el pulso y el titileo,
 //     rápidos, que solo dicen "está vivo" y no dependen de la edad.
 function drawLiveSigil(ctx, size, model, progress, time) {
   ctx.clearRect(0, 0, size, size);
+  shapeAt(model, progress);
   const scale = size / 500;
   const pulse = 0.5 + 0.5 * Math.sin((time * 2 * Math.PI) / PULSE_PERIOD + model.pulsePhase);
+
+  // El sigilo: todos sus trazos en una sola pasada, con un halo que
+  // late. Vértices con inglete para que las esquinas arregladas se
+  // vean nítidas.
   ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-
-  // Ramas (debajo del trazo original).
-  const branchWidths = [2.2, 1.5, 1];
-  const tips = [];
-  ctx.shadowColor = 'rgba(201, 162, 75, 0.8)';
-  ctx.shadowBlur = (2 + 6 * pulse) * scale;
-  ctx.strokeStyle = `rgba(201, 162, 75, ${0.55 + 0.3 * pulse})`;
-  model.branches.forEach((b, i) => {
-    const grown = branchGrowth(b, progress);
-    tips[i] = null;
-    if (grown <= 0) return;
-    tips[i] = tracePolyline(ctx, b.poly, grown * b.poly.total, size);
-    ctx.lineWidth = Math.max(0.6, branchWidths[b.depth] * scale);
-    ctx.stroke();
-    // Brote luminoso en la punta mientras la rama sigue creciendo.
-    if (grown < 1) {
-      ctx.beginPath();
-      ctx.arc(tips[i].x * size, tips[i].y * size, Math.max(1, 2 * scale), 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(240, 215, 150, 0.9)';
-      ctx.fill();
-    }
-  });
-
-  // Trazo original: el corazón del sigilo, el que más late.
+  ctx.lineJoin = 'miter';
+  ctx.miterLimit = 3;
   ctx.shadowColor = 'rgba(231, 205, 140, 0.9)';
   ctx.shadowBlur = (4 + 14 * pulse) * scale;
-  ctx.strokeStyle = `rgba(231, 233, 240, ${0.8 + 0.2 * pulse})`;
+  // Con la edad, el blanco frío del trazo recién nacido va tomando un
+  // tono dorado. Así el paso del tiempo se ve aunque el trazo ya
+  // estuviera limpio y casi no tenga nada que enderezar.
+  const r = Math.round(231 + 14 * progress);
+  const g = Math.round(233 - 8 * progress);
+  const b = Math.round(240 - 70 * progress);
+  ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${0.8 + 0.2 * pulse})`;
   ctx.lineWidth = Math.max(1.2, 3 * scale);
-  model.strokes.forEach(poly => {
-    tracePolyline(ctx, poly, poly.total, size);
-    ctx.stroke();
+  ctx.beginPath();
+  model.strokes.forEach(st => {
+    st.D.forEach((p, i) => {
+      if (i === 0) ctx.moveTo(p.x * size, p.y * size);
+      else ctx.lineTo(p.x * size, p.y * size);
+    });
   });
+  ctx.stroke();
 
   // Centelleo: destellos breves que se encienden y apagan cada uno a
   // su propio ritmo.
@@ -1485,11 +1625,9 @@ function drawLiveSigil(ctx, size, model, progress, time) {
   ctx.shadowBlur = 8 * scale;
   ctx.fillStyle = '#fff6dc';
   model.sparkles.forEach(sp => {
-    const p = sp.branch === undefined ? sp.point : tips[sp.branch];
-    if (!p) return;
-    if (sp.branch !== undefined && branchGrowth(model.branches[sp.branch], progress) < 0.5) return;
     const v = Math.pow(Math.max(0, Math.sin(time * sp.speed + sp.phase)), 16);
     if (v < 0.02) return;
+    const p = model.strokes[sp.stroke].D[sp.idx];
     ctx.globalAlpha = v;
     ctx.beginPath();
     ctx.arc(p.x * size, p.y * size, (1 + 2.5 * v) * Math.max(0.6, scale), 0, Math.PI * 2);
@@ -1551,7 +1689,7 @@ function addLiveCard(record) {
   element.append(canvas, deleteBtn);
   liveGrid.prepend(element);
 
-  const card = { record, model: buildGrowthModel(record), canvas, element, visible: true };
+  const card = { record, model: buildSigilModel(record), canvas, element, visible: true };
   liveCards.set(record.id, card);
   if (cardVisibility) cardVisibility.observe(element);
 
@@ -1640,7 +1778,7 @@ function sowSigil() {
   }
   resetAll();
   addLiveCard(record);
-  hintText.textContent = 'Sigilo sembrado. Ya está creciendo.';
+  hintText.textContent = 'Sigilo sembrado. Ya está madurando.';
 }
 
 sowBtn.addEventListener('click', sowSigil);
