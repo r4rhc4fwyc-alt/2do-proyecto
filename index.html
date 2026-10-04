@@ -14,6 +14,7 @@
   --accent: #c9a24b;
   --accent-dim: rgba(201, 162, 75, 0.35);
   --danger: #d16464;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -205,6 +206,77 @@ input[type="range"]:disabled {
   margin-top: 10px;
   text-align: center;
 }
+
+.live-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.live-card {
+  background: #0d1018;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.live-card canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  cursor: zoom-in;
+}
+
+.live-card button {
+  width: 100%;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8rem;
+  padding: 8px;
+}
+
+.live-card button:hover {
+  color: var(--danger);
+}
+
+.live-empty {
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-style: italic;
+  margin: 12px 0 0;
+  text-align: center;
+}
+
+.live-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: #05060a;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+}
+
+.live-overlay[hidden] {
+  display: none;
+}
+
+.live-overlay canvas {
+  width: min(92vw, 88vh);
+  aspect-ratio: 1 / 1;
+}
+
+.live-overlay p {
+  font-size: 0.75rem;
+  color: #3a3f52;
+  margin: 12px 0 0;
+}
 </style>
 </head>
 <body>
@@ -214,7 +286,7 @@ input[type="range"]:disabled {
 
   <div class="panel">
     <label for="phraseInput">Frase o intención</label>
-    <textarea id="phraseInput" placeholder="Ej: Confío en mi propio criterio"></textarea>
+    <textarea id="phraseInput" placeholder="Ej: Confío en mi propio criterio" autocomplete="off" spellcheck="false"></textarea>
     <div class="row" style="margin-top:10px;">
       <button id="generateBtn" class="primary">Generar sigilo</button>
     </div>
@@ -288,6 +360,21 @@ input[type="range"]:disabled {
       <button id="resetTransformBtn" disabled>Restablecer giro</button>
     </div>
   </div>
+
+  <div class="panel">
+    <label>Sigilos vivos</label>
+    <div class="row">
+      <button id="sowBtn" class="primary" disabled>Sembrar sigilo</button>
+    </div>
+    <p class="hint" style="text-align:left;">Al sembrarlo, el trazo se cierra y empieza a madurar. La frase se olvida.</p>
+    <div class="live-grid" id="liveGrid"></div>
+    <p class="live-empty" id="liveEmpty">Aún no hay sigilos vivos.</p>
+  </div>
+</div>
+
+<div class="live-overlay" id="liveOverlay" hidden>
+  <canvas id="overlayCanvas"></canvas>
+  <p>Toca para cerrar</p>
 </div>
 
 <script>
@@ -633,6 +720,7 @@ const rotationValue = document.getElementById('rotationValue');
 const flipHBtn = document.getElementById('flipHBtn');
 const flipVBtn = document.getElementById('flipVBtn');
 const resetTransformBtn = document.getElementById('resetTransformBtn');
+const sowBtn = document.getElementById('sowBtn');
 
 // Construyen un juego de trazos/transforms "vacío", con una entrada
 // por modo. Se usan tanto para el estado inicial como para resetear
@@ -724,8 +812,12 @@ function currentStrokes() {
   return strokesByGeoMode[getSelectedGeometry()][getSelectedMode()];
 }
 
+// También habilita "Sembrar sigilo": ambos dependen de lo mismo (que
+// haya algún trazo en el cajón activo) y se actualizan en los mismos
+// momentos.
 function updateUndoButton() {
   undoBtn.disabled = currentStrokes().length === 0;
+  sowBtn.disabled = currentStrokes().length === 0;
 }
 
 // Los controles de giro/inversión solo tienen sentido si hay algo
@@ -781,7 +873,19 @@ function renderLettersReadout() {
 }
 
 function generateSigil() {
+  // Sin frase no hay nada que generar, y no queremos que un toque
+  // accidental en "Generar" (con el campo ya vacío, ver abajo) borre
+  // un trazo a medio hacer.
+  if (!phraseInput.value.trim()) {
+    hintText.textContent = 'Escribe una frase para generar el sigilo.';
+    return;
+  }
   currentLetters = reduceToSigil(phraseInput.value);
+  // La frase se usa UNA sola vez, aquí, y se descarta en el acto: no
+  // queda en el campo, ni en ninguna variable, ni en el almacenamiento.
+  // Solo sobreviven las consonantes reducidas (necesarias para guiar
+  // el trazo), y también esas se olvidan al sembrar el sigilo.
+  phraseInput.value = '';
   // Un sigilo nuevo cambia por completo el significado de lo
   // dibujado: los trazos viejos, en cualquier combinación de
   // geometría y modo, ya no corresponderían a nada.
@@ -887,7 +991,11 @@ clearStrokeBtn.addEventListener('click', () => {
   updateTransformControls();
 });
 
-resetBtn.addEventListener('click', () => {
+// Vuelve el generador a cero: sin frase, sin letras, sin trazos. Lo
+// usa "Reiniciar todo" y también el sembrado de un sigilo, que es el
+// momento en que las letras (lo último que quedaba de la frase) se
+// olvidan.
+function resetAll() {
   phraseInput.value = '';
   currentLetters = [];
   strokesByGeoMode = { rueda: emptyModeStrokes(), kamea: emptyModeStrokes() };
@@ -900,7 +1008,9 @@ resetBtn.addEventListener('click', () => {
   renderLettersReadout();
   drawBackground();
   hintText.textContent = 'Genera un sigilo para empezar a trazar.';
-});
+}
+
+resetBtn.addEventListener('click', resetAll);
 
 rotationSlider.addEventListener('input', () => {
   currentTransform().angle = Number(rotationSlider.value);
@@ -1029,6 +1139,729 @@ drawCanvas.addEventListener('pointercancel', stopDrawing);
 drawCanvas.addEventListener('pointerleave', stopDrawing);
 
 // ---------------------------------------------------------------
+// 4.5. HIPERSIGILO: sigilos vivos que maduran con el tiempo real
+// ---------------------------------------------------------------
+// Un sigilo sembrado deja de ser editable y pasa a esta sección,
+// donde "vive": se afina despacio (ligado a la hora real de su
+// nacimiento) y pulsa/titila rápido mientras la página está abierta.
+//
+// Lo único que se guarda de cada sigilo es:
+//   - id:     identificador aleatorio sin significado (ej. "x7k2p9"),
+//             solo para que el código distinga sus registros. Nunca
+//             se muestra.
+//   - bornAt: la hora exacta de nacimiento (ms desde 1970).
+//   - strokes: la forma ya trazada, en coordenadas normalizadas 0–1.
+// Ni la frase ni las letras reducidas se guardan jamás.
+
+const STORAGE_KEY = 'hipersigilos.v1';
+const MATURATION_MS = 8 * 60 * 60 * 1000; // ventana de maduración: 8 h
+const PULSE_PERIOD = 2.2;                 // segundos por latido
+
+// --- Azar reproducible ---------------------------------------------
+// La forma afinada NO se guarda: se recalcula cada vez a partir del
+// trazo y del id del sigilo, que funciona como semilla (para los
+// desfases y destellos). Con la misma semilla, el generador devuelve
+// siempre la misma secuencia de números, así que un sigilo madura
+// siempre hacia la misma forma final, sin importar cuántas veces se
+// abra la app.
+function hashString(str) {
+  let h = 2166136261 >>> 0; // FNV-1a
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function randomId() {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  const bytes = new Uint8Array(6);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => chars[b % chars.length]).join('');
+}
+
+// --- Almacenamiento ------------------------------------------------
+
+let liveSigils = [];
+
+function isValidRecord(r) {
+  return r && typeof r.id === 'string' && typeof r.bornAt === 'number' &&
+    Array.isArray(r.strokes) && r.strokes.length > 0;
+}
+
+function loadLiveSigils() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed.filter(isValidRecord) : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function saveLiveSigils() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(liveSigils));
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+// Cuánto maduró un sigilo, de 0 (recién nacido) a 1 (8 h o más). Se
+// calcula siempre desde la hora de nacimiento: no hace falta que la
+// app haya estado abierta entretanto. Al reabrirla, el sigilo aparece
+// directamente en el punto que le corresponde, y a partir de 1 se
+// queda congelado.
+function maturity(record, now) {
+  return Math.max(0, Math.min(1, (now - record.bornAt) / MATURATION_MS));
+}
+
+// --- Geometría de polilíneas ---------------------------------------
+
+function angleDiff(a, b) {
+  return Math.atan2(Math.sin(a - b), Math.cos(a - b));
+}
+
+// Reparte puntos a distancias iguales (`step`) a lo largo del trazo.
+// Un trazo a mano tiene muchos puntos donde el dedo iba lento y pocos
+// donde iba rápido; con muestras parejas, todo lo que viene después
+// (suavizar, medir giros) se comporta igual en todo el trazo.
+function resample(points, step) {
+  const pts = [points[0]];
+  for (let i = 1; i < points.length; i++) {
+    const q = pts[pts.length - 1];
+    if (Math.hypot(points[i].x - q.x, points[i].y - q.y) > 1e-6) pts.push(points[i]);
+  }
+  if (pts.length < 2) return null;
+  const out = [{ x: pts[0].x, y: pts[0].y }];
+  let carry = step; // lo que falta para la próxima muestra
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+    let pos = 0;
+    while (segLen - pos >= carry) {
+      pos += carry;
+      const f = pos / segLen;
+      out.push({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f });
+      carry = step;
+    }
+    carry -= segLen - pos;
+  }
+  const last = pts[pts.length - 1];
+  const tail = out[out.length - 1];
+  if (Math.hypot(last.x - tail.x, last.y - tail.y) > step * 0.3) out.push({ x: last.x, y: last.y });
+  else out[out.length - 1] = { x: last.x, y: last.y };
+  return out.length >= 2 ? out : null;
+}
+
+// Promedio gaussiano de ancho `sigma` (en muestras), que puede ser un
+// número o una lista con un ancho por punto. Los extremos se reflejan
+// respecto a sí mismos, así que no se encogen ni se mueven: el
+// suavizado alisa la curva pero deja los extremos donde están.
+function gaussSmooth(pts, sigma) {
+  const n = pts.length;
+  const at = i => {
+    if (i < 0) {
+      const j = Math.min(-i, n - 1);
+      return { x: 2 * pts[0].x - pts[j].x, y: 2 * pts[0].y - pts[j].y };
+    }
+    if (i > n - 1) {
+      const j = Math.max(2 * (n - 1) - i, 0);
+      return { x: 2 * pts[n - 1].x - pts[j].x, y: 2 * pts[n - 1].y - pts[j].y };
+    }
+    return pts[i];
+  };
+  return pts.map((_, i) => {
+    const sg = Array.isArray(sigma) ? sigma[i] : sigma;
+    const R = Math.ceil(sg * 3);
+    let x = 0;
+    let y = 0;
+    let sum = 0;
+    for (let k = -R; k <= R; k++) {
+      const w = Math.exp(-(k * k) / (2 * sg * sg));
+      const p = at(i + k);
+      x += p.x * w;
+      y += p.y * w;
+      sum += w;
+    }
+    return { x: x / sum, y: y / sum };
+  });
+}
+
+// Quita el temblor y las ondulaciones de una curva SIN encogerla ni
+// aplanarla.
+//   - Cuánto se alisa depende de cuán cerrada es la curva en cada
+//     punto: un arco amplio (radio grande) se alisa mucho, y se le
+//     quitan hasta las ondulaciones lentas de la mano; una vuelta
+//     cerrada, como el centro de una espiral, se alisa apenas, para no
+//     perder sus giros. El ancho del alisado es ~45% del radio local.
+//   - Un promedio gaussiano solo alisa, pero también tira los arcos
+//     hacia adentro. Por eso se alisa dos veces y se extrapola
+//     (2·G − G·G): lo que el promedio le quita a los arcos de verdad
+//     se les devuelve, y las ondulaciones, que son mucho más finas, se
+//     quedan fuera.
+function fairCurve(pts) {
+  const n = pts.length;
+  const base = gaussSmooth(pts, CURVE_SIGMA_MIN);
+  const theta = unwrappedHeading(base);
+  const radius = new Array(n).fill(null);
+  for (let i = 0; i < n; i++) {
+    const k = Math.min(20, i, n - 1 - i);
+    if (k < 6) continue;
+    const turn = Math.abs(theta[i + k] - theta[i - k]);
+    radius[i] = turn < 1e-3 ? Infinity : (2 * k * STEP) / turn;
+  }
+  // Los extremos toman el radio del punto válido más cercano.
+  const first = radius.findIndex(r => r !== null);
+  if (first < 0) return gaussSmooth(pts, CURVE_SIGMA_MIN);
+  for (let i = 0; i < first; i++) radius[i] = radius[first];
+  for (let i = n - 1; i >= 0 && radius[i] === null; i--) {
+    let j = i;
+    while (radius[j] === null) j--;
+    radius[i] = radius[j];
+  }
+  // El ancho del alisado, él mismo suavizado, para que no cambie de golpe.
+  let sigma = radius.map(r => Math.max(CURVE_SIGMA_MIN, Math.min(CURVE_SIGMA_MAX, (CURVE_SIGMA_RATIO * r) / STEP)));
+  sigma = sigma.map((_, i) => {
+    let sum = 0;
+    let cnt = 0;
+    for (let j = Math.max(0, i - 8); j <= Math.min(n - 1, i + 8); j++) { sum += sigma[j]; cnt++; }
+    return sum / cnt;
+  });
+  const g1 = gaussSmooth(pts, sigma);
+  const g2 = gaussSmooth(g1, sigma);
+  return g1.map((p, i) => ({ x: 2 * p.x - g2[i].x, y: 2 * p.y - g2[i].y }));
+}
+
+// --- Afinado del trazo ----------------------------------------------
+// El sigilo no echa ramas: se afina a sí mismo. Con el tiempo, cada
+// parte de su trazo va hacia una versión "bien hecha" de sí misma:
+//   - los tramos que quisieron ser rectos se enderezan;
+//   - los tramos que son curvas se alisan en un arco limpio;
+//   - las esquinas redondeadas o torcidas se vuelven vértices nítidos,
+//     en el punto donde se cruzarían las dos rectas que llegan a ellas;
+//   - los vértices que quedaron casi juntos (el final de un trazo y el
+//     principio del siguiente, por ejemplo) se funden en uno solo.
+//
+// Cómo se distingue una esquina de una curva: se mide cuánto gira el
+// trazo en una ventana corta y en una larga alrededor de cada punto.
+// En una esquina casi todo el giro ocurre en la ventana corta; en una
+// curva, la ventana larga gira bastante más que la corta.
+
+const STEP = 0.004;         // separación entre muestras (fracción del lado del canvas)
+const CORNER_SMALL = 10;    // ventana corta para detectar esquinas, en muestras (±0,04)
+const CORNER_LARGE = 28;    // ventana larga, para distinguir esquina de curva (±0,11)
+const CORNER_MIN_TURN = 0.85;  // giro mínimo en la ventana corta (≈49°)
+const CORNER_MAX_RATIO = 1.3;  // largo/corto por encima de esto es curva, no esquina
+const CORNER_MIN_RATIO = 0.75; // por debajo, el giro va y vuelve (ondulación), no es esquina
+const MIN_RUN = 12;         // tramo mínimo entre dos vértices (≈0,05 del canvas)
+const CLUSTER_R = 0.035;    // vértices más cerca que esto se funden en uno
+const CURVE_SIGMA_MIN = 6;   // alisado mínimo de una curva, en muestras (0,024): vueltas cerradas
+const CURVE_SIGMA_MAX = 30;  // alisado máximo (0,12): arcos amplios
+const CURVE_SIGMA_RATIO = 0.45; // ancho del alisado como fracción del radio local
+const REFINE_START = 0.25;  // cuánto se escalona el inicio del afinado entre el principio y el final del trazo
+const REFINE_SPAN = 0.65;   // fracción de las 8 h que tarda cada punto en afinarse
+
+// Rumbo del trazo en cada muestra, "desenrollado": si el trazo da
+// una vuelta completa, el rumbo sigue creciendo en vez de volver a
+// empezar. Así el giro entre dos puntos es el giro real, también en
+// espirales y lazos.
+function unwrappedHeading(S) {
+  const n = S.length;
+  const h = [];
+  for (let j = 0; j < n; j++) {
+    const a = S[Math.max(0, j - 3)];
+    const b = S[Math.min(n - 1, j + 3)];
+    h.push(Math.atan2(b.y - a.y, b.x - a.x));
+  }
+  const theta = [h[0]];
+  for (let j = 1; j < n; j++) theta.push(theta[j - 1] + angleDiff(h[j], h[j - 1]));
+  return theta;
+}
+
+function detectCorners(S) {
+  const n = S.length;
+  const theta = unwrappedHeading(S);
+  const score = new Array(n).fill(0);
+  // Solo se buscan esquinas con la ventana larga completa a ambos
+  // lados: cerca de un extremo no se puede saber si un giro es una
+  // esquina o el comienzo de una curva cerrada (como el centro de una
+  // espiral). Lo que quede a menos de ~0,11 de un extremo se trata
+  // como parte del tramo vecino.
+  for (let i = CORNER_LARGE; i < n - CORNER_LARGE; i++) {
+    const small = Math.abs(theta[i + CORNER_SMALL] - theta[i - CORNER_SMALL]);
+    if (small < CORNER_MIN_TURN) continue;
+    const large = Math.abs(theta[i + CORNER_LARGE] - theta[i - CORNER_LARGE]);
+    if (large > small * CORNER_MAX_RATIO || large < small * CORNER_MIN_RATIO) continue;
+    score[i] = small;
+  }
+  // De cada racimo de candidatos vecinos, se queda el que más gira.
+  const corners = [];
+  for (let i = 0; i < n; i++) {
+    if (score[i] === 0) continue;
+    let best = true;
+    for (let j = Math.max(0, i - CORNER_SMALL); j <= Math.min(n - 1, i + CORNER_SMALL); j++) {
+      if (score[j] > score[i] || (score[j] === score[i] && j < i)) { best = false; break; }
+    }
+    if (best) corners.push(i);
+  }
+  return corners;
+}
+
+// ¿El tramo entre las muestras a y b quiso ser una recta? Se mira
+// cuánto se aleja de la cuerda y hacia qué lado:
+//   - hasta un 4,5% de su largo: recta, tenga la forma que tenga;
+//   - hasta un 7%: recta solo si el trazo oscila a ambos lados de la
+//     cuerda (temblor de mano);
+//   - si se curva siempre hacia el mismo lado, es un arco hecho a
+//     propósito y se queda como curva, por suave que sea.
+function isStraight(S, a, b) {
+  const A = S[a];
+  const B = S[b];
+  const len = Math.hypot(B.x - A.x, B.y - A.y);
+  if (len < 0.03) return false;
+  const nx = -(B.y - A.y) / len;
+  const ny = (B.x - A.x) / len;
+  let maxDev = 0;
+  let sum = 0;
+  for (let i = a; i <= b; i++) {
+    const d = (S[i].x - A.x) * nx + (S[i].y - A.y) * ny;
+    sum += d;
+    if (Math.abs(d) > maxDev) maxDev = Math.abs(d);
+  }
+  if (maxDev <= Math.max(0.008, 0.045 * len)) return true;
+  const oneSided = Math.abs(sum / (b - a + 1)) >= 0.5 * maxDev;
+  return !oneSided && maxDev <= 0.07 * len;
+}
+
+// Recta que mejor se ajusta a un tramo (sin mirar su 15% de cada
+// extremo, donde las esquinas redondeadas la desviarían).
+function fitLine(S, a, b) {
+  let lo = a + Math.round((b - a) * 0.15);
+  let hi = b - Math.round((b - a) * 0.15);
+  if (hi - lo < 4) { lo = a; hi = b; }
+  const m = hi - lo + 1;
+  let cx = 0;
+  let cy = 0;
+  for (let i = lo; i <= hi; i++) { cx += S[i].x; cy += S[i].y; }
+  cx /= m;
+  cy /= m;
+  let sxx = 0;
+  let syy = 0;
+  let sxy = 0;
+  for (let i = lo; i <= hi; i++) {
+    const dx = S[i].x - cx;
+    const dy = S[i].y - cy;
+    sxx += dx * dx;
+    syy += dy * dy;
+    sxy += dx * dy;
+  }
+  const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  let dx = Math.cos(ang);
+  let dy = Math.sin(ang);
+  if ((S[b].x - S[a].x) * dx + (S[b].y - S[a].y) * dy < 0) { dx = -dx; dy = -dy; }
+  return { x: cx, y: cy, dx, dy };
+}
+
+function projectOnLine(p, L) {
+  const t = (p.x - L.x) * L.dx + (p.y - L.y) * L.dy;
+  return { x: L.x + L.dx * t, y: L.y + L.dy * t };
+}
+
+function intersectLines(L1, L2) {
+  const cross = L1.dx * L2.dy - L1.dy * L2.dx;
+  if (Math.abs(cross) < 0.25) return null; // casi paralelas: no hay esquina que arreglar
+  const t = ((L2.x - L1.x) * L2.dy - (L2.y - L1.y) * L2.dx) / cross;
+  return { x: L1.x + L1.dx * t, y: L1.y + L1.dy * t };
+}
+
+// Parte la forma de UN trazo: dónde están sus vértices, qué tramos
+// son rectas y cuáles curvas, y dónde debería quedar cada vértice
+// una vez arreglado.
+function analyseStroke(P) {
+  const n = P.length;
+  const S = gaussSmooth(P, 3); // copia sin temblor, solo para medir
+  const nodes = [0];
+  detectCorners(S).forEach(c => {
+    if (c - nodes[nodes.length - 1] >= MIN_RUN && n - 1 - c >= MIN_RUN) nodes.push(c);
+  });
+  nodes.push(n - 1);
+
+  const runs = [];
+  for (let j = 0; j < nodes.length - 1; j++) {
+    const a = nodes[j];
+    const b = nodes[j + 1];
+    const straight = isStraight(S, a, b);
+    runs.push({ a, b, straight, line: straight ? fitLine(S, a, b) : null });
+  }
+
+  const nodePos = nodes.map((idx, j) => {
+    const p = S[idx];
+    const lines = [runs[j - 1], runs[j]].filter(r => r && r.straight).map(r => r.line);
+    if (lines.length === 2) {
+      const q = intersectLines(lines[0], lines[1]);
+      return q && Math.hypot(q.x - p.x, q.y - p.y) < 0.06 ? q : p;
+    }
+    if (lines.length === 1) return projectOnLine(p, lines[0]);
+    return p;
+  });
+  return { P, nodes, runs, nodePos };
+}
+
+// Une los vértices que quedaron casi en el mismo sitio, entre todos
+// los trazos del sigilo, en uno solo (el promedio de ellos).
+function clusterNodes(strokes) {
+  const clusters = [];
+  const refs = [];
+  strokes.forEach(st => {
+    st.nodeT = [];
+    st.nodePos.forEach((pos, j) => {
+      let c = clusters.find(k => Math.hypot(k.sx / k.n - pos.x, k.sy / k.n - pos.y) < CLUSTER_R);
+      if (!c) { c = { sx: 0, sy: 0, n: 0 }; clusters.push(c); }
+      c.sx += pos.x;
+      c.sy += pos.y;
+      c.n++;
+      refs.push({ st, j, c });
+    });
+  });
+  refs.forEach(({ st, j, c }) => { st.nodeT[j] = { x: c.sx / c.n, y: c.sy / c.n }; });
+}
+
+// Dónde debería terminar cada punto del trazo. Las rectas se
+// reparten parejas entre sus dos vértices ya arreglados; las curvas
+// se alisan y luego se desplazan para que enganchen con ellos.
+function buildTargets(st) {
+  const { P, runs, nodeT } = st;
+  const T = new Array(P.length);
+  runs.forEach((run, j) => {
+    const A = nodeT[j];
+    const B = nodeT[j + 1];
+    const cum = [0];
+    for (let i = run.a + 1; i <= run.b; i++) {
+      cum.push(cum[cum.length - 1] + Math.hypot(P[i].x - P[i - 1].x, P[i].y - P[i - 1].y));
+    }
+    const total = cum[cum.length - 1] || 1;
+    const curve = run.straight ? null : fairCurve(P.slice(run.a, run.b + 1));
+    const dax = A.x - P[run.a].x;
+    const day = A.y - P[run.a].y;
+    const dbx = B.x - P[run.b].x;
+    const dby = B.y - P[run.b].y;
+    for (let i = run.a; i <= run.b; i++) {
+      const f = cum[i - run.a] / total;
+      if (run.straight) {
+        T[i] = { x: A.x + (B.x - A.x) * f, y: A.y + (B.y - A.y) * f };
+      } else {
+        const c = curve[i - run.a];
+        T[i] = { x: c.x + dax * (1 - f) + dbx * f, y: c.y + day * (1 - f) + dby * f };
+      }
+    }
+  });
+  return T;
+}
+
+// Modelo de un sigilo: el trazo original (P), su versión afinada (T)
+// y, para cada punto, el momento en que empieza a moverse hacia ella.
+//
+// Interpolación en el tiempo: cada punto tarda REFINE_SPAN (65%) de
+// las 8 h en llegar a su destino, con arranque suave. El arranque se
+// escalona un poco a lo largo del trazo (el principio se afina antes
+// que el final) y con un desfase propio por tramo, así que ningún
+// instante intermedio se ve como un simple "fundido" de toda la forma:
+// unas partes van más adelantadas que otras, como si el sigilo
+// madurara por zonas. A las 8 h, todos los puntos han llegado.
+function buildSigilModel(record) {
+  const rand = mulberry32(hashString(record.id));
+  const model = { strokes: [], sparkles: [], pulsePhase: rand() * Math.PI * 2 };
+
+  record.strokes.forEach(raw => {
+    const P = resample(raw, STEP);
+    if (P && P.length >= 4) model.strokes.push(analyseStroke(P));
+  });
+  clusterNodes(model.strokes);
+
+  const lengths = model.strokes.map(st => (st.P.length - 1) * STEP);
+  const totalLen = lengths.reduce((a, b) => a + b, 0) || 1;
+  let before = 0;
+  model.strokes.forEach((st, s) => {
+    st.T = buildTargets(st);
+    st.D = st.P.map(p => ({ x: p.x, y: p.y })); // forma que se dibuja ahora
+    st.start = new Array(st.P.length);
+    st.runs.forEach(run => {
+      const delay = rand() * 0.10;
+      for (let i = run.a; i <= run.b; i++) {
+        const u = (before + i * STEP) / totalLen;
+        st.start[i] = REFINE_START * u + delay;
+      }
+    });
+    before += lengths[s];
+  });
+
+  // Destellos: uno en cada vértice y unos pocos sueltos sobre el trazo.
+  model.strokes.forEach((st, s) => {
+    st.nodes.forEach(idx => {
+      model.sparkles.push({ stroke: s, idx, phase: rand() * Math.PI * 2, speed: 1.6 + rand() * 2.4 });
+    });
+  });
+  if (model.strokes.length) {
+    for (let i = 0; i < 4; i++) {
+      const s = Math.floor(rand() * model.strokes.length);
+      const idx = Math.floor(rand() * model.strokes[s].P.length);
+      model.sparkles.push({ stroke: s, idx, phase: rand() * Math.PI * 2, speed: 1.6 + rand() * 2.4 });
+    }
+  }
+  return model;
+}
+
+// Calcula la forma que corresponde al progreso dado (0–1). Solo
+// recalcula si el progreso cambió de verdad (más de ~3 s en la
+// ventana de 8 h), así que llamarlo en cada cuadro no cuesta nada.
+function shapeAt(model, progress) {
+  if (model.shapeProgress !== undefined && Math.abs(model.shapeProgress - progress) < 1e-4) return;
+  model.strokes.forEach(st => {
+    for (let i = 0; i < st.P.length; i++) {
+      const t = Math.max(0, Math.min(1, (progress - st.start[i]) / REFINE_SPAN));
+      const e = t * t * (3 - 2 * t);
+      st.D[i].x = st.P[i].x + (st.T[i].x - st.P[i].x) * e;
+      st.D[i].y = st.P[i].y + (st.T[i].y - st.P[i].y) * e;
+    }
+  });
+  model.shapeProgress = progress;
+}
+
+// --- Dibujo --------------------------------------------------------
+
+// Dos ritmos, bien separados:
+//   - progress (0–1): el afinado del trazo, ligado a las 8 h reales.
+//   - time (segundos de reloj de animación): el pulso y el titileo,
+//     rápidos, que solo dicen "está vivo" y no dependen de la edad.
+function drawLiveSigil(ctx, size, model, progress, time) {
+  ctx.clearRect(0, 0, size, size);
+  shapeAt(model, progress);
+  const scale = size / 500;
+  const pulse = 0.5 + 0.5 * Math.sin((time * 2 * Math.PI) / PULSE_PERIOD + model.pulsePhase);
+
+  // El sigilo: todos sus trazos en una sola pasada, con un halo que
+  // late. Vértices con inglete para que las esquinas arregladas se
+  // vean nítidas.
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'miter';
+  ctx.miterLimit = 3;
+  ctx.shadowColor = 'rgba(231, 205, 140, 0.9)';
+  ctx.shadowBlur = (4 + 14 * pulse) * scale;
+  // Con la edad, el blanco frío del trazo recién nacido va tomando un
+  // tono dorado. Así el paso del tiempo se ve aunque el trazo ya
+  // estuviera limpio y casi no tenga nada que enderezar.
+  const r = Math.round(231 + 14 * progress);
+  const g = Math.round(233 - 8 * progress);
+  const b = Math.round(240 - 70 * progress);
+  ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${0.8 + 0.2 * pulse})`;
+  ctx.lineWidth = Math.max(1.2, 3 * scale);
+  ctx.beginPath();
+  model.strokes.forEach(st => {
+    st.D.forEach((p, i) => {
+      if (i === 0) ctx.moveTo(p.x * size, p.y * size);
+      else ctx.lineTo(p.x * size, p.y * size);
+    });
+  });
+  ctx.stroke();
+
+  // Centelleo: destellos breves que se encienden y apagan cada uno a
+  // su propio ritmo.
+  ctx.shadowColor = 'rgba(255, 240, 200, 1)';
+  ctx.shadowBlur = 8 * scale;
+  ctx.fillStyle = '#fff6dc';
+  model.sparkles.forEach(sp => {
+    const v = Math.pow(Math.max(0, Math.sin(time * sp.speed + sp.phase)), 16);
+    if (v < 0.02) return;
+    const p = model.strokes[sp.stroke].D[sp.idx];
+    ctx.globalAlpha = v;
+    ctx.beginPath();
+    ctx.arc(p.x * size, p.y * size, (1 + 2.5 * v) * Math.max(0.6, scale), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  });
+  ctx.shadowBlur = 0;
+}
+
+// Ajusta la resolución interna de un canvas a su tamaño en pantalla
+// (nítido en Retina). Solo lo redimensiona si cambió, así que se
+// puede llamar en cada cuadro sin costo.
+function fitCanvas(canvas) {
+  const size = canvas.clientWidth;
+  const dpr = window.devicePixelRatio || 1;
+  const px = Math.round(size * dpr);
+  if (canvas.width !== px || canvas.height !== px) {
+    canvas.width = px;
+    canvas.height = px;
+  }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, size };
+}
+
+// --- Interfaz: tarjetas, vista ampliada, sembrar, borrar ------------
+
+const liveGrid = document.getElementById('liveGrid');
+const liveEmpty = document.getElementById('liveEmpty');
+const liveOverlay = document.getElementById('liveOverlay');
+const overlayCanvas = document.getElementById('overlayCanvas');
+
+const liveCards = new Map(); // id -> { record, model, canvas, element, visible }
+let overlayId = null;
+
+// Solo se animan las tarjetas que están en pantalla.
+const cardVisibility = 'IntersectionObserver' in window
+  ? new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        const card = liveCards.get(entry.target.dataset.id);
+        if (card) card.visible = entry.isIntersecting;
+      });
+    })
+  : null;
+
+function updateLiveEmpty() {
+  liveEmpty.style.display = liveSigils.length ? 'none' : '';
+}
+
+function addLiveCard(record) {
+  const element = document.createElement('div');
+  element.className = 'live-card';
+  element.dataset.id = record.id;
+  const canvas = document.createElement('canvas');
+  canvas.setAttribute('role', 'img');
+  canvas.setAttribute('aria-label', 'Sigilo vivo. Toca para ampliarlo.');
+  const deleteBtn = document.createElement('button');
+  deleteBtn.textContent = 'Borrar';
+  element.append(canvas, deleteBtn);
+  liveGrid.prepend(element);
+
+  const card = { record, model: buildSigilModel(record), canvas, element, visible: true };
+  liveCards.set(record.id, card);
+  if (cardVisibility) cardVisibility.observe(element);
+
+  canvas.addEventListener('click', () => {
+    overlayId = record.id;
+    liveOverlay.hidden = false;
+  });
+  deleteBtn.addEventListener('click', () => {
+    if (confirmByDoubleTap(deleteBtn, '¿Borrar? Toca de nuevo')) deleteLiveSigil(record.id);
+  });
+  updateLiveEmpty();
+}
+
+// Confirmación dentro de la página (no con confirm(), que algunos
+// visores, como el de los artifacts de claude.ai, bloquean y responden
+// siempre "no"): el primer toque cambia el texto del botón a una
+// pregunta; solo un segundo toque en los 4 s siguientes confirma.
+function confirmByDoubleTap(button, question) {
+  if (button.dataset.armed === 'true') {
+    clearTimeout(Number(button.dataset.timer));
+    button.dataset.armed = 'false';
+    button.textContent = button.dataset.label;
+    return true;
+  }
+  button.dataset.label = button.textContent;
+  button.dataset.armed = 'true';
+  button.textContent = question;
+  button.dataset.timer = String(setTimeout(() => {
+    button.dataset.armed = 'false';
+    button.textContent = button.dataset.label;
+  }, 4000));
+  return false;
+}
+
+// Borrado manual y definitivo: el ciclo lo cierra el usuario, nunca
+// un temporizador.
+function deleteLiveSigil(id) {
+  liveSigils = liveSigils.filter(r => r.id !== id);
+  saveLiveSigils();
+  const card = liveCards.get(id);
+  if (card) {
+    if (cardVisibility) cardVisibility.unobserve(card.element);
+    card.element.remove();
+    liveCards.delete(id);
+  }
+  if (overlayId === id) closeOverlay();
+  updateLiveEmpty();
+}
+
+function closeOverlay() {
+  overlayId = null;
+  liveOverlay.hidden = true;
+}
+
+liveOverlay.addEventListener('click', closeOverlay);
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && overlayId) closeOverlay();
+});
+
+// Nacimiento: cierra el trazado de la combinación geometría+modo
+// activa, hornea en la forma el giro/inversión que tenga en ese
+// momento, y guarda SOLO id + hora + forma. Después borra todo el
+// generador, incluidas las letras reducidas: lo último que quedaba
+// de la frase.
+function sowSigil() {
+  const t = currentTransform();
+  const round = v => Math.round(v * 10000) / 10000;
+  const strokes = currentStrokes()
+    .filter(s => s.length > 1)
+    .map(s => s.map(p => {
+      const q = toNormalizedPoint(applyTransform(toPixelPoint(p), t));
+      return { x: round(q.x), y: round(q.y) };
+    }));
+  if (strokes.length === 0) return;
+  if (!confirmByDoubleTap(sowBtn, '¿Sembrar? Ya no se podrá editar. Toca de nuevo')) return;
+
+  let id;
+  do { id = randomId(); } while (liveSigils.some(r => r.id === id));
+  const record = { id, bornAt: Date.now(), strokes };
+
+  liveSigils.push(record);
+  if (!saveLiveSigils()) {
+    liveSigils.pop();
+    hintText.textContent = 'No se pudo guardar el sigilo en este navegador.';
+    return;
+  }
+  resetAll();
+  addLiveCard(record);
+  hintText.textContent = 'Sigilo sembrado. Ya está madurando.';
+}
+
+sowBtn.addEventListener('click', sowSigil);
+
+// Un solo bucle de animación para todos los sigilos. El navegador lo
+// pausa solo cuando la pestaña no está visible; al volver, la
+// madurez se recalcula desde la hora de nacimiento, así que el
+// sigilo aparece directamente donde le corresponde.
+function animateLiveSigils() {
+  const now = Date.now();
+  const time = performance.now() / 1000;
+  liveCards.forEach(card => {
+    if (!card.visible || overlayId) return;
+    const { ctx, size } = fitCanvas(card.canvas);
+    drawLiveSigil(ctx, size, card.model, maturity(card.record, now), time);
+  });
+  const overlayCard = overlayId && liveCards.get(overlayId);
+  if (overlayCard) {
+    const { ctx, size } = fitCanvas(overlayCanvas);
+    drawLiveSigil(ctx, size, overlayCard.model, maturity(overlayCard.record, now), time);
+  }
+  requestAnimationFrame(animateLiveSigils);
+}
+
+// ---------------------------------------------------------------
 // 5. ARRANQUE
 // ---------------------------------------------------------------
 
@@ -1044,6 +1877,13 @@ window.addEventListener('resize', () => {
 
 resizeCanvases();
 drawBackground();
+
+// Los más antiguos primero: addLiveCard() pone cada uno arriba, así
+// que el más reciente queda al principio de la grilla.
+liveSigils = loadLiveSigils();
+liveSigils.forEach(addLiveCard);
+updateLiveEmpty();
+requestAnimationFrame(animateLiveSigils);
 </script>
 </body>
 </html>
